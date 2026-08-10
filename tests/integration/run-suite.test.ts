@@ -41,8 +41,14 @@ describe('eval harness', () => {
         join(reportDirectory, 'review-queue.jsonl'),
         'utf8'
       );
+      const trialLines = await readFile(
+        join(reportDirectory, 'trials.jsonl'),
+        'utf8'
+      );
       const html = await readFile(join(reportDirectory, 'index.html'), 'utf8');
       expect(reviewQueue.trim().split('\n')).toHaveLength(3);
+      expect(trialLines).toContain('"inputTokens":180');
+      expect(trialLines).toContain('"outputTokens":72');
       expect(html).toContain('Eval Pyramid Report');
       expect(html).toContain('integration-test');
     } finally {

@@ -1,4 +1,5 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import type { ValidateFunction } from 'ajv';
 
 import type {
   AgentRun,
@@ -8,6 +9,9 @@ import type {
   ToolCall,
   ToolExpectation,
 } from '../types.js';
+
+const schemaCompiler = new Ajv2020({ allErrors: true, strict: true });
+const schemaValidators = new WeakMap<object, ValidateFunction>();
 
 export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
   const grades: Grade[] = [];
@@ -72,8 +76,7 @@ function gradeSchema(
   schema: { [key: string]: JsonValue },
   output: JsonValue
 ): Grade {
-  const ajv = new Ajv2020({ allErrors: true, strict: true });
-  const validate = ajv.compile(schema);
+  const validate = validatorFor(schema);
   const passed = validate(output);
   const errors = validate.errors
     ?.map(
@@ -86,6 +89,14 @@ function gradeSchema(
     'Output matches its JSON Schema.',
     errors ?? 'Output does not match its JSON Schema.'
   );
+}
+
+function validatorFor(schema: { [key: string]: JsonValue }): ValidateFunction {
+  const cached = schemaValidators.get(schema);
+  if (cached) return cached;
+  const validate = schemaCompiler.compile(schema);
+  schemaValidators.set(schema, validate);
+  return validate;
 }
 
 function gradeTools(

@@ -1,12 +1,16 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { runSuite } from '../../src/harness/run-suite.js';
-import type { SystemUnderTestFactory } from '../../src/types.js';
-import type { EvalTask } from '../../src/types.js';
+import type {
+  AgentRun,
+  EvalTask,
+  JudgeProvider,
+  SystemUnderTestFactory,
+} from '../../src/types.js';
 
 const task: EvalTask = {
   id: 'runtime-failure',
@@ -86,4 +90,135 @@ describe('run suite boundaries', () => {
       'concurrency must be a positive integer'
     );
   });
+
+  it('records factory setup failures instead of aborting the suite', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-setup-')
+    );
+    const factory: SystemUnderTestFactory = {
+      create: () => Promise.reject(new Error('authentication failed')),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+
+      expect(result.records[0]?.error).toBe('authentication failed');
+      expect(result.records[0]?.passed).toBe(false);
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('retains run evidence and deterministic grades when the judge fails', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-judge-failure-')
+    );
+    const judgedTask: EvalTask = {
+      ...task,
+      rubric: [
+        {
+          id: 'quality',
+          description: 'The response has acceptable quality.',
+          minimumScore: 0.8,
+        },
+      ],
+    };
+    const judgeProvider: JudgeProvider = {
+      name: 'failing-judge',
+      score: () => Promise.reject(new Error('judge unavailable')),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [judgedTask],
+        factory: successfulFactory(),
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+        judgeProvider,
+      });
+      const record = result.records[0];
+
+      expect(record?.run.output).toEqual({ status: 'complete' });
+      expect(record?.deterministicPassed).toBe(true);
+      expect(record?.judgePassed).toBe(false);
+      expect(record?.grades.map((grade) => grade.grader)).toEqual([
+        'turn-budget',
+        'judge:quality:runtime',
+      ]);
+      expect(record?.error).toBe('judge unavailable');
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the workspace even when system disposal fails', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-cleanup-')
+    );
+    let trialWorkspace = '';
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: (_task, context) => {
+            trialWorkspace = context.workspace;
+            return Promise.resolve(successfulRun());
+          },
+          dispose: () => Promise.reject(new Error('close failed')),
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+
+      expect(result.records[0]?.passed).toBe(false);
+      expect(result.records[0]?.error).toContain('System disposal failed');
+      await expect(access(trialWorkspace)).rejects.toThrow();
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
 });
+
+function successfulFactory(): SystemUnderTestFactory {
+  return {
+    create: () =>
+      Promise.resolve({
+        run: () => Promise.resolve(successfulRun()),
+      }),
+  };
+}
+
+function successfulRun(): AgentRun {
+  return {
+    output: { status: 'complete' },
+    outcome: {},
+    transcript: [],
+    toolCalls: [],
+    metrics: {
+      latencyMs: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      costUsd: 0,
+      turns: 1,
+    },
+  };
+}

@@ -17,11 +17,13 @@ describe('report safety', () => {
           authorization: 'Bearer secret',
           safe: 'Contact person@example.com',
         },
+        metrics: { inputTokens: 180, outputTokens: 72 },
         rows: [{ apiKey: 'secret-key' }],
       })
     ).toEqual({
       email: '[REDACTED]',
       nested: { authorization: '[REDACTED]', safe: 'Contact [REDACTED_EMAIL]' },
+      metrics: { inputTokens: 180, outputTokens: 72 },
       rows: [{ apiKey: '[REDACTED]' }],
     });
   });

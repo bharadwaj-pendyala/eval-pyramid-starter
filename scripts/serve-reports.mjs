@@ -1,7 +1,15 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import {
+  extname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 const root = resolve('reports/latest');
 const port = Number(process.env['PORT'] ?? 4173);
@@ -20,8 +28,13 @@ const server = createServer(async (request, response) => {
   const relativePath =
     rawPath === '/' ? 'index.html' : normalize(rawPath).replace(/^[/\\]+/u, '');
   const filePath = resolve(join(root, relativePath));
+  const pathFromRoot = relative(root, filePath);
 
-  if (filePath !== root && !filePath.startsWith(`${root}/`)) {
+  if (
+    isAbsolute(pathFromRoot) ||
+    pathFromRoot === '..' ||
+    pathFromRoot.startsWith(`..${sep}`)
+  ) {
     response.writeHead(403).end('Forbidden');
     return;
   }
