@@ -1,0 +1,50 @@
+{
+  "name": "eval-pyramid-starter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Provider-neutral TypeScript starter for layered LLM and agent evaluations.",
+  "type": "module",
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "npm run eval:deterministic && playwright test",
+    "eval:deterministic": "tsx src/cli.ts run --trials 1 --k 1 --judge none",
+    "eval:repeat": "tsx src/cli.ts run --trials 5 --k 3 --judge none",
+    "eval:judge": "tsx src/cli.ts calibrate --judge fake",
+    "eval:review": "tsx src/cli.ts review",
+    "eval:ci": "tsx src/cli.ts run --trials 3 --k 3 --judge fake --fail-on-gate",
+    "report:serve": "node scripts/serve-reports.mjs",
+    "verify": "npm run format:check && npm run type-check && npm run lint && npm run test:coverage && npm run build"
+  },
+  "keywords": [
+    "llm",
+    "agents",
+    "evals",
+    "testing",
+    "typescript"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
+  }
+}
