@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bharadwaj-pendyala/eval-pyramid-starter/evals/eval-task.schema.json",
+  "title": "Eval task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "description", "input", "expected"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customerId", "message"],
+      "properties": {
+        "customerId": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outputSchema": { "type": "object" },
+        "outcome": { "type": "object" },
+        "requiredTools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/toolExpectation" }
+        },
+        "forbiddenTools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "maxTurns": { "type": "integer", "minimum": 1 },
+        "maxCostUsd": { "type": "number", "minimum": 0 },
+        "maxLatencyMs": { "type": "number", "minimum": 0 }
+      },
+      "minProperties": 1
+    },
+    "rubric": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rubricCriterion" }
+    }
+  },
+  "$defs": {
+    "toolExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "arguments": { "type": "object" }
+      }
+    },
+    "rubricCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "minimumScore"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "description": { "type": "string", "minLength": 10 },
+        "minimumScore": { "type": "number", "minimum": 0, "maximum": 1 },
+        "requiredSignals": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

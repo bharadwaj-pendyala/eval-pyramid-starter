@@ -1,0 +1,224 @@
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import { runSuite } from '../../src/harness/run-suite.js';
+import type {
+  AgentRun,
+  EvalTask,
+  JudgeProvider,
+  SystemUnderTestFactory,
+} from '../../src/types.js';
+
+const task: EvalTask = {
+  id: 'runtime-failure',
+  description: 'Capture a runtime failure as a failed trial.',
+  input: { customerId: 'test', message: 'Run the failing system.' },
+  expected: { maxTurns: 1 },
+};
+
+const thresholds = {
+  deterministicPassRate: 1,
+  passAt1: 1,
+  passPowerK: 1,
+  judgeAverage: 1,
+};
+
+describe('run suite boundaries', () => {
+  it('captures adapter failures, disposes the system, and creates a run id', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-runtime-')
+    );
+    let disposed = false;
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: () => Promise.reject(new Error('adapter exploded')),
+          dispose: () => {
+            disposed = true;
+            return Promise.resolve();
+          },
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+
+      expect(result.records[0]?.error).toBe('adapter exploded');
+      expect(result.records[0]?.grades[0]?.grader).toBe('runtime');
+      expect(result.summary.runId).not.toBe('');
+      expect(disposed).toBe(true);
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects invalid suite options before running', async () => {
+    const factory: SystemUnderTestFactory = {
+      create: () => Promise.reject(new Error('must not create')),
+    };
+    const base = {
+      tasks: [task],
+      factory,
+      trials: 1,
+      k: 1,
+      concurrency: 1,
+      thresholds,
+      reportDirectory: 'unused',
+    };
+
+    await expect(runSuite({ ...base, tasks: [] })).rejects.toThrow(
+      'At least one task is required'
+    );
+    await expect(runSuite({ ...base, trials: 0 })).rejects.toThrow(
+      'trials must be a positive integer'
+    );
+    await expect(runSuite({ ...base, k: 2 })).rejects.toThrow(
+      'k must be a positive integer'
+    );
+    await expect(runSuite({ ...base, concurrency: 0 })).rejects.toThrow(
+      'concurrency must be a positive integer'
+    );
+  });
+
+  it('records factory setup failures instead of aborting the suite', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-setup-')
+    );
+    const factory: SystemUnderTestFactory = {
+      create: () => Promise.reject(new Error('authentication failed')),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+
+      expect(result.records[0]?.error).toBe('authentication failed');
+      expect(result.records[0]?.passed).toBe(false);
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('retains run evidence and deterministic grades when the judge fails', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-judge-failure-')
+    );
+    const judgedTask: EvalTask = {
+      ...task,
+      rubric: [
+        {
+          id: 'quality',
+          description: 'The response has acceptable quality.',
+          minimumScore: 0.8,
+        },
+      ],
+    };
+    const judgeProvider: JudgeProvider = {
+      name: 'failing-judge',
+      score: () => Promise.reject(new Error('judge unavailable')),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [judgedTask],
+        factory: successfulFactory(),
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+        judgeProvider,
+      });
+      const record = result.records[0];
+
+      expect(record?.run.output).toEqual({ status: 'complete' });
+      expect(record?.deterministicPassed).toBe(true);
+      expect(record?.judgePassed).toBe(false);
+      expect(record?.grades.map((grade) => grade.grader)).toEqual([
+        'turn-budget',
+        'judge:quality:runtime',
+      ]);
+      expect(record?.error).toBe('judge unavailable');
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the workspace even when system disposal fails', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-cleanup-')
+    );
+    let trialWorkspace = '';
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: (_task, context) => {
+            trialWorkspace = context.workspace;
+            return Promise.resolve(successfulRun());
+          },
+          dispose: () => Promise.reject(new Error('close failed')),
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+
+      expect(result.records[0]?.passed).toBe(false);
+      expect(result.records[0]?.error).toContain('System disposal failed');
+      await expect(access(trialWorkspace)).rejects.toThrow();
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+function successfulFactory(): SystemUnderTestFactory {
+  return {
+    create: () =>
+      Promise.resolve({
+        run: () => Promise.resolve(successfulRun()),
+      }),
+  };
+}
+
+function successfulRun(): AgentRun {
+  return {
+    output: { status: 'complete' },
+    outcome: {},
+    transcript: [],
+    toolCalls: [],
+    metrics: {
+      latencyMs: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      costUsd: 0,
+      turns: 1,
+    },
+  };
+}
