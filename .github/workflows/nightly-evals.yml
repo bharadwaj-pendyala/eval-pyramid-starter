@@ -22,7 +22,7 @@ jobs:
       - run: npm run eval:ci
       - name: Upload eval evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scheduled-eval-report
           path: reports/latest
