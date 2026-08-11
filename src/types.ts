@@ -14,13 +14,13 @@ export interface RubricCriterion {
   requiredSignals?: string[];
 }
 
+export type TaskSeverity = 'critical' | 'high' | 'medium' | 'low';
+
 export interface EvalTask {
   id: string;
   description: string;
-  input: {
-    customerId: string;
-    message: string;
-  };
+  severity: TaskSeverity;
+  input: { [key: string]: JsonValue };
   expected: {
     outputSchema?: { [key: string]: JsonValue };
     outcome?: { [key: string]: JsonValue };
@@ -44,12 +44,34 @@ export interface TranscriptEvent {
   toolCall?: ToolCall;
 }
 
+export interface SystemRunMetrics {
+  turns: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  usageSource?: string;
+}
+
+export interface SystemRun {
+  output: JsonValue;
+  transcript: TranscriptEvent[];
+  metrics: SystemRunMetrics;
+}
+
+export interface ObservedEvidence {
+  outcome: JsonValue;
+  toolCalls: ToolCall[];
+  source: string;
+}
+
 export interface TrialMetrics {
   latencyMs: number;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
   turns: number;
+  latencySource: 'harness-wall-clock';
+  usageSource: string | null;
 }
 
 export interface AgentRun {
@@ -57,6 +79,7 @@ export interface AgentRun {
   outcome: JsonValue;
   transcript: TranscriptEvent[];
   toolCalls: ToolCall[];
+  evidenceSource: string;
   metrics: TrialMetrics;
 }
 
@@ -67,12 +90,23 @@ export interface TrialContext {
 }
 
 export interface SystemUnderTest {
-  run(task: EvalTask, context: TrialContext): Promise<AgentRun>;
+  run(task: EvalTask, context: TrialContext): Promise<SystemRun>;
+}
+
+export interface EvidenceObserver {
+  observe(task: EvalTask, context: TrialContext): Promise<ObservedEvidence>;
+}
+
+export interface TrialEnvironment {
+  system: SystemUnderTest;
+  observer: EvidenceObserver;
   dispose?(): Promise<void>;
 }
 
 export interface SystemUnderTestFactory {
-  create(): Promise<SystemUnderTest>;
+  readonly name: string;
+  readonly evidenceSource: string;
+  create(context: TrialContext): Promise<TrialEnvironment>;
 }
 
 export interface Grade {
@@ -102,6 +136,7 @@ export interface JudgeProvider {
 
 export interface TrialRecord {
   taskId: string;
+  severity: TaskSeverity;
   trialIndex: number;
   run: AgentRun;
   grades: Grade[];
@@ -113,6 +148,7 @@ export interface TrialRecord {
 
 export interface TaskReliability {
   taskId: string;
+  severity: TaskSeverity;
   successes: number;
   trials: number;
   passAt1: number;
@@ -125,16 +161,29 @@ export interface ReleaseThresholds {
   passAt1: number;
   passPowerK: number;
   judgeAverage: number;
+  criticalPassRate: number;
+  requireJudge: boolean;
+  requireIndependentEvidence: boolean;
 }
 
 export interface ReleaseGate {
   passed: boolean;
   checks: Array<{
     name: string;
-    actual: number;
+    actual: number | null;
     required: number;
     passed: boolean;
   }>;
+}
+
+export interface RunProvenance {
+  systemUnderTest: string;
+  evidenceObserver: string;
+  judge: string | null;
+  taskFile: string;
+  taskSetSha256: string;
+  sourceRevision: string | null;
+  configuration: { [key: string]: JsonValue };
 }
 
 export interface EvalSummary {
@@ -145,18 +194,22 @@ export interface EvalSummary {
   trialCount: number;
   deterministicPassRate: number;
   judgeAverage: number | null;
+  independentEvidenceRate: number;
+  criticalPassRate: number;
   passAt1: number;
   passAtK: number;
   passPowerK: number;
   tasks: TaskReliability[];
   releaseGate: ReleaseGate;
+  provenance: RunProvenance;
 }
 
 export interface EvalConfig {
   taskFile: string;
-  reportDirectory: string;
+  reportRoot: string;
   concurrency: number;
   thresholds: ReleaseThresholds;
+  liveThresholds: ReleaseThresholds;
 }
 
 export interface GoldenJudgeExample {
@@ -172,5 +225,8 @@ export interface CalibrationSummary {
   meanAbsoluteError: number;
   agreementWithinTolerance: number;
   tolerance: number;
+  goldenSetFile: string;
+  goldenSetSha256: string;
+  calibratedAt: string;
   passed: boolean;
 }

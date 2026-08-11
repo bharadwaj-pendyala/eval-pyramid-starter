@@ -4,7 +4,7 @@
   "title": "Eval task",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "description", "input", "expected"],
+  "required": ["id", "description", "severity", "input", "expected"],
   "properties": {
     "id": {
       "type": "string",
@@ -14,14 +14,12 @@
       "type": "string",
       "minLength": 10
     },
+    "severity": {
+      "enum": ["critical", "high", "medium", "low"]
+    },
     "input": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["customerId", "message"],
-      "properties": {
-        "customerId": { "type": "string", "minLength": 1 },
-        "message": { "type": "string", "minLength": 1 }
-      }
+      "additionalProperties": true
     },
     "expected": {
       "type": "object",

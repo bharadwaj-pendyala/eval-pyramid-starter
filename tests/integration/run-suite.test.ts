@@ -1,58 +1,71 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { FakeRefundAgentFactory } from '../../src/adapters/fake-refund-agent.js';
+import { RefundAgentFactory } from '../../src/examples/refund-agent/environment.js';
 import { runSuite } from '../../src/harness/run-suite.js';
 import { loadTasks } from '../../src/loaders/tasks.js';
+import type { ReleaseThresholds } from '../../src/types.js';
 
-describe('eval harness', () => {
-  it('runs isolated repeated trials and writes reviewable reports', async () => {
-    const reportDirectory = await mkdtemp(
-      join(tmpdir(), 'eval-pyramid-reports-')
-    );
+const thresholds: ReleaseThresholds = {
+  deterministicPassRate: 1,
+  passAt1: 1,
+  passPowerK: 1,
+  judgeAverage: 0.8,
+  criticalPassRate: 1,
+  requireJudge: false,
+  requireIndependentEvidence: true,
+};
+
+describe('real example eval stack', () => {
+  it('runs repeated isolated trials across application and tool HTTP sockets', async () => {
+    const reportRoot = await mkdtemp(join(tmpdir(), 'eval-reports-'));
 
     try {
       const result = await runSuite({
         tasks: await loadTasks('evals/tasks.jsonl'),
-        factory: new FakeRefundAgentFactory({ failureEvery: 2 }),
+        factory: new RefundAgentFactory(),
         trials: 2,
         k: 2,
         concurrency: 2,
-        thresholds: {
-          deterministicPassRate: 1,
-          passAt1: 0.8,
-          passPowerK: 0.5,
-          judgeAverage: 0.8,
-        },
-        reportDirectory,
+        thresholds,
+        reportRoot,
         runId: 'integration-test',
       });
 
       expect(result.records).toHaveLength(6);
-      expect(result.records.filter((record) => record.passed)).toHaveLength(3);
-      expect(result.summary.passAt1).toBe(0.5);
-      expect(result.summary.passPowerK).toBe(0);
-      expect(result.summary.releaseGate.passed).toBe(false);
+      expect(result.records.every((record) => record.passed)).toBe(true);
+      expect(
+        result.records.every((record) =>
+          record.run.evidenceSource.includes('persisted-state')
+        )
+      ).toBe(true);
+      expect(result.summary.passAt1).toBe(1);
+      expect(result.summary.passPowerK).toBe(1);
+      expect(result.summary.releaseGate.passed).toBe(true);
+      expect(result.summary.judgeAverage).toBeNull();
 
-      const reviewQueue = await readFile(
-        join(reportDirectory, 'review-queue.jsonl'),
-        'utf8'
-      );
       const trialLines = await readFile(
-        join(reportDirectory, 'trials.jsonl'),
+        join(result.latestDirectory, 'trials.jsonl'),
         'utf8'
       );
-      const html = await readFile(join(reportDirectory, 'index.html'), 'utf8');
-      expect(reviewQueue.trim().split('\n')).toHaveLength(3);
-      expect(trialLines).toContain('"inputTokens":180');
-      expect(trialLines).toContain('"outputTokens":72');
-      expect(html).toContain('Eval Pyramid Report');
+      const html = await readFile(
+        join(result.latestDirectory, 'index.html'),
+        'utf8'
+      );
+      expect(trialLines).toContain('"latencySource":"harness-wall-clock"');
+      expect(trialLines).toContain(
+        '"usageSource":"example-rule-agent:no-model-provider"'
+      );
+      expect(html).toContain('Independent evidence');
       expect(html).toContain('integration-test');
+      await expect(
+        access(join(result.runDirectory, 'summary.json'))
+      ).resolves.toBeUndefined();
     } finally {
-      await rm(reportDirectory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 });

@@ -22,7 +22,7 @@ jobs:
       - run: npm run verify
       - run: npm audit --omit=dev --audit-level=high
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - run: npm run test:system
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4

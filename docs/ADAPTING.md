@@ -1,59 +1,117 @@
 # Adapting the starter
 
-The narrowest useful integration replaces the synthetic refund adapter while keeping the task, grader, and reporting contracts stable.
+The production-shaped integration has two independent HTTP boundaries: one invokes the application, and one observes durable side effects. This prevents an application from declaring its own tool use or business outcome successful.
 
-## Implement the system boundary
+## 1. Define generic tasks
 
-Implement `SystemUnderTestFactory` and return a fresh `SystemUnderTest` for each trial:
+`EvalTask.input` accepts any JSON object. Replace the refund fixtures with synthetic or de-identified cases for your product. Assign a severity to every case and express machine-checkable expectations before adding rubrics.
 
-```ts
-import type {
-  AgentRun,
-  EvalTask,
-  SystemUnderTest,
-  SystemUnderTestFactory,
-  TrialContext,
-} from '../src/types.js';
-
-class ProductFactory implements SystemUnderTestFactory {
-  create(): Promise<SystemUnderTest> {
-    return Promise.resolve(new ProductAdapter());
-  }
-}
-
-class ProductAdapter implements SystemUnderTest {
-  async run(task: EvalTask, context: TrialContext): Promise<AgentRun> {
-    // Invoke your application in context.workspace and return observable evidence.
-    throw new Error(
-      `Implement task ${task.id} for trial ${context.trialIndex}.`
-    );
-  }
-
-  async dispose(): Promise<void> {
-    // Close clients and release trial-scoped resources.
+```json
+{
+  "id": "cancel-subscription",
+  "description": "Cancel an active subscription after identity verification.",
+  "severity": "critical",
+  "input": { "accountId": "acct-100", "message": "Cancel my plan." },
+  "expected": {
+    "outcome": { "subscription": { "status": "cancelled" } },
+    "requiredTools": [{ "name": "cancel_subscription" }],
+    "forbiddenTools": ["delete_account"],
+    "maxTurns": 6,
+    "maxLatencyMs": 10000
   }
 }
 ```
 
-Return the final output, observable outcome, transcript, tool calls, latency, token counts, cost, and conversational turn count. Do not award credit for hidden chain-of-thought. Grade only evidence that your application can safely retain and review.
+Update `evals/eval-task.schema.json` only when your task envelope needs stronger input validation. Keep product-specific input validation inside the SUT adapter as well.
 
-## Write tasks before rubrics
+## 2. Implement the application endpoint
 
-Start with cases that have machine-checkable answers:
+Set `EVAL_SUT_RUN_URL` to an endpoint that accepts:
 
-- required output shape;
-- expected database or workflow outcome;
-- required and forbidden tools;
-- turn, cost, and latency budgets.
+```json
+{
+  "task": {
+    "id": "...",
+    "description": "...",
+    "severity": "...",
+    "input": {},
+    "expected": {}
+  },
+  "context": { "runId": "...", "trialIndex": 0 }
+}
+```
 
-Add a rubric only when the behavior cannot be expressed reliably as a deterministic assertion. Keep each rubric criterion atomic and give it a human-scored golden set.
+Return only application-owned evidence:
 
-## Preserve trial isolation
+```json
+{
+  "output": { "message": "The subscription is cancelled." },
+  "transcript": [
+    { "role": "user", "content": "Cancel my plan." },
+    { "role": "assistant", "content": "The subscription is cancelled." }
+  ],
+  "metrics": {
+    "turns": 2,
+    "inputTokens": 420,
+    "outputTokens": 38,
+    "costUsd": 0.0014,
+    "usageSource": "provider-response:model-name"
+  }
+}
+```
 
-The harness creates a separate temporary workspace and a fresh adapter for every trial. Your adapter is still responsible for isolating external resources. Use a disposable tenant, namespace, database transaction, or mocked tool layer. Never point destructive eval tools at production.
+Token and cost fields are optional. When a task configures `maxCostUsd`, a missing cost fails closed. Do not return hidden chain-of-thought. Retain only safe, reviewable transcript events.
 
-## Establish thresholds
+The harness measures wall-clock latency around this request. An application-provided latency field is ignored.
 
-Run a reviewed baseline with enough trials to expose observed variance. Choose `k` from the product behavior you need to reason about, then set thresholds in `eval.config.ts`. Record why each threshold exists and who can approve a change.
+## 3. Implement the evidence endpoint
 
-The included finite estimators summarize the sampled trials. For release decisions with sparse failures or costly incidents, add confidence intervals and severity-weighted gates appropriate to your risk.
+Set `EVAL_EVIDENCE_URL` to a separately controlled endpoint. The harness calls it with `taskId`, `runId`, and `trialIndex` query parameters after the application returns.
+
+Return durable, externally observed evidence:
+
+```json
+{
+  "outcome": { "subscription": { "status": "cancelled" } },
+  "toolCalls": [
+    { "name": "verify_identity", "arguments": { "accountId": "acct-100" } },
+    { "name": "cancel_subscription", "arguments": { "accountId": "acct-100" } }
+  ],
+  "source": "audit-database:eval-events"
+}
+```
+
+Good evidence sources include an audit database, workflow event store, sandbox ledger, test tenant, or tool proxy owned outside the SUT process. An endpoint that echoes the SUT response is still self-reporting and should use a `self-reported:` source label. Release gates can reject it.
+
+Use a unique tenant, namespace, transaction, or database per trial. Clean up only that resolved trial scope. Never point destructive eval tools at production.
+
+## 4. Run the live lane
+
+Copy `.env.example` to `.env`, set the two endpoint URLs and judge credentials, then run:
+
+```bash
+npm run eval:judge
+npm run eval:live
+```
+
+The first command scores the human-labeled golden set and writes a local calibration record. The second verifies that record before it makes judged eval calls. A model change, golden-set edit, failed calibration, or record older than seven days requires recalibration.
+
+The paid live workflow is manual by default. Pull requests run the offline real-HTTP stack and never require secrets or call a model provider.
+
+## 5. Review failures
+
+```bash
+npm run eval:review -- list
+npm run eval:review -- adjudicate --task cancel-subscription --trial 0 --score 0 --notes "Cancellation was not persisted."
+npm run eval:review -- export
+```
+
+Trial indices are zero-based in the machine-readable files and review command. Decisions are append-only under `reports/reviews/<run-id>.jsonl`. The original run under `reports/runs/<run-id>` remains unchanged.
+
+Review exports are calibration candidates, not an automatic golden-set update. A person should select an atomic rubric criterion, remove sensitive data, and approve the label before committing it.
+
+## 6. Set evidence-based gates
+
+Run a reviewed baseline with enough trials to expose observed variance. Choose `k` from the product behavior you need to reason about. Record why each threshold exists and who can approve a change.
+
+The starter gates aggregate deterministic quality, `pass@1`, `pass^k`, critical-task pass rate, independent evidence coverage, and an optional judge average. Add confidence intervals, slice-specific thresholds, and risk-weighted gates when sparse but costly failures matter.

@@ -1,4 +1,4 @@
-name: Scheduled evals
+name: Scheduled offline evals
 
 on:
   workflow_dispatch:
