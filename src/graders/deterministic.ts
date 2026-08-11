@@ -49,14 +49,7 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
     );
   }
   if (task.expected.maxCostUsd !== undefined) {
-    grades.push(
-      limitGrade(
-        'cost-budget',
-        run.metrics.costUsd,
-        task.expected.maxCostUsd,
-        'USD'
-      )
-    );
+    grades.push(usageLimitGrade(run.metrics.costUsd, task.expected.maxCostUsd));
   }
   if (task.expected.maxLatencyMs !== undefined) {
     grades.push(
@@ -70,6 +63,19 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
   }
 
   return grades;
+}
+
+function usageLimitGrade(actual: number | null, limit: number): Grade {
+  if (actual === null) {
+    return {
+      grader: 'cost-budget',
+      score: 0,
+      passed: false,
+      rationale:
+        'Cost usage was not reported by the provider, so the budget cannot be verified.',
+    };
+  }
+  return limitGrade('cost-budget', actual, limit, 'USD');
 }
 
 function gradeSchema(

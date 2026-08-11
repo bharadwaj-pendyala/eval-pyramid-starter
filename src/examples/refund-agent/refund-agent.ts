@@ -1,195 +1,88 @@
 import type {
-  AgentRun,
   EvalTask,
   JsonValue,
+  SystemRun,
   SystemUnderTest,
-  SystemUnderTestFactory,
   ToolCall,
   TranscriptEvent,
-  TrialContext,
 } from '../../types.js';
 import { decideRefund, extractOrderId, type OrderRecord } from './domain.js';
-import {
-  InMemoryRefundToolGateway,
-  type RefundToolGateway,
-} from './tool-gateway.js';
+import type { RefundToolGateway } from './tool-gateway.js';
 
-export interface RefundAgentFactoryOptions {
-  failureEvery?: number;
-  tools?: () => RefundToolGateway;
-}
-
-export class RefundAgentFactory implements SystemUnderTestFactory {
-  readonly #failureEvery: number;
-  readonly #tools: () => RefundToolGateway;
-
-  constructor(options: RefundAgentFactoryOptions = {}) {
-    this.#failureEvery = options.failureEvery ?? 0;
-    this.#tools = options.tools ?? (() => new InMemoryRefundToolGateway());
-  }
-
-  create(): Promise<SystemUnderTest> {
-    return Promise.resolve(new RefundAgent(this.#tools(), this.#failureEvery));
-  }
-}
-
-class RefundAgent implements SystemUnderTest {
+export class RefundAgent implements SystemUnderTest {
   readonly #tools: RefundToolGateway;
-  readonly #failureEvery: number;
-  #injectFailure = false;
 
-  constructor(tools: RefundToolGateway, failureEvery: number) {
+  constructor(tools: RefundToolGateway) {
     this.#tools = tools;
-    this.#failureEvery = failureEvery;
   }
 
-  async run(task: EvalTask, context: TrialContext): Promise<AgentRun> {
-    this.#injectFailure =
-      this.#failureEvery > 0 &&
-      (context.trialIndex + 1) % this.#failureEvery === 0;
-    const startedAt = performance.now();
+  async run(task: EvalTask): Promise<SystemRun> {
+    const input = refundInput(task.input);
     const calls: ToolCall[] = [];
     await this.#call(calls, 'verify_identity', {
-      customerId: task.input.customerId,
+      customerId: input.customerId,
     });
 
-    const orderId = extractOrderId(task.input.message);
-    if (!orderId) {
-      return this.#missingOrder(task, calls, startedAt);
-    }
+    const orderId = extractOrderId(input.message);
+    if (!orderId) return this.#missingOrder(input.message, calls);
 
     const order = await this.#call(calls, 'fetch_order', { orderId });
-    if (order.customerId !== task.input.customerId) {
+    if (order.customerId !== input.customerId) {
       throw new Error('The order does not belong to the verified customer.');
     }
 
     const policy: 'duplicate-charge' | 'refund-window' = order.duplicateCharge
       ? 'duplicate-charge'
       : 'refund-window';
-    const policyRules = await this.#call(calls, 'fetch_policy', {
-      policy,
-    });
+    const policyRules = await this.#call(calls, 'fetch_policy', { policy });
     const decision = decideRefund(order, policyRules.refundWindowDays);
     if (decision.action === 'refund') {
       return this.#refund(
-        task,
+        input.message,
         calls,
         orderId,
         order.amount,
-        decision.policy,
-        startedAt
+        decision.policy
       );
     }
-    return this.#escalate(task, calls, orderId, order.amount, startedAt);
+    return this.#escalate(input.message, calls);
   }
 
-  async #missingOrder(
-    task: EvalTask,
-    calls: ToolCall[],
-    startedAt: number
-  ): Promise<AgentRun> {
-    if (this.#injectFailure) {
-      await this.#call(calls, 'process_refund', {
-        amount: 10,
-        orderId: 'unknown',
-      });
-      return buildRun(task, calls, {
-        output: {
-          message: 'A refund was attempted without an order identifier.',
-          policyCited: false,
-          status: 'error',
-        },
-        outcome: {
-          ticket: { status: 'error' },
-          refund: { status: 'attempted' },
-        },
-        startedAt,
-      });
-    }
-
+  async #missingOrder(message: string, calls: ToolCall[]): Promise<SystemRun> {
     await this.#call(calls, 'request_order_details', { fields: ['orderId'] });
-    return buildRun(task, calls, {
-      output: {
-        message:
-          'Please provide the order identifier so I can locate the purchase before reviewing refund eligibility.',
-        policyCited: false,
-        status: 'needs-information',
-      },
-      outcome: {
-        ticket: { status: 'waiting-for-customer' },
-        refund: { status: 'not-created' },
-      },
-      startedAt,
+    return buildRun(message, calls, {
+      message:
+        'Please provide the order identifier so I can locate the purchase before reviewing refund eligibility.',
+      policyCited: false,
+      status: 'needs-information',
     });
   }
 
   async #refund(
-    task: EvalTask,
+    message: string,
     calls: ToolCall[],
     orderId: string,
     amount: number,
-    policy: 'duplicate-charge' | 'refund-window',
-    startedAt: number
-  ): Promise<AgentRun> {
+    policy: 'duplicate-charge' | 'refund-window'
+  ): Promise<SystemRun> {
     await this.#call(calls, 'process_refund', { amount, orderId });
-    if (!this.#injectFailure) {
-      await this.#call(calls, 'send_confirmation', { channel: 'email' });
-    }
-    return buildRun(task, calls, {
-      output: {
-        message: this.#injectFailure
-          ? 'The refund was processed, but confirmation is still pending.'
-          : `Under the ${policy} policy, your $${amount} refund was processed and confirmed.`,
-        policyCited: true,
-        status: this.#injectFailure ? 'pending' : 'resolved',
-      },
-      outcome: {
-        ticket: { status: this.#injectFailure ? 'pending' : 'resolved' },
-        refund: { status: 'processed', amount },
-      },
-      startedAt,
+    await this.#call(calls, 'send_confirmation', { channel: 'email' });
+    return buildRun(message, calls, {
+      message: `Under the ${policy} policy, your $${amount} refund was processed and confirmed.`,
+      policyCited: true,
+      status: 'resolved',
     });
   }
 
-  async #escalate(
-    task: EvalTask,
-    calls: ToolCall[],
-    orderId: string,
-    amount: number,
-    startedAt: number
-  ): Promise<AgentRun> {
-    if (this.#injectFailure) {
-      await this.#call(calls, 'process_refund', { amount, orderId });
-      return buildRun(task, calls, {
-        output: {
-          message:
-            'The refund was processed even though the request is outside the policy window.',
-          policyCited: true,
-          status: 'resolved',
-        },
-        outcome: {
-          ticket: { status: 'resolved' },
-          refund: { status: 'processed' },
-        },
-        startedAt,
-      });
-    }
-
+  async #escalate(message: string, calls: ToolCall[]): Promise<SystemRun> {
     await this.#call(calls, 'escalate_to_human', {
       reason: 'outside-refund-window',
     });
-    return buildRun(task, calls, {
-      output: {
-        message:
-          'The order is outside the refund policy window, so the ticket was escalated for human review.',
-        policyCited: true,
-        status: 'escalated',
-      },
-      outcome: {
-        ticket: { status: 'escalated' },
-        refund: { status: 'not-created' },
-      },
-      startedAt,
+    return buildRun(message, calls, {
+      message:
+        'The order is outside the refund policy window, so the ticket was escalated for human review.',
+      policyCited: true,
+      status: 'escalated',
     });
   }
 
@@ -262,44 +155,47 @@ class RefundAgent implements SystemUnderTest {
   }
 }
 
-interface RunResult {
-  output: JsonValue;
-  outcome: JsonValue;
-  startedAt: number;
+function refundInput(input: { [key: string]: JsonValue }): {
+  customerId: string;
+  message: string;
+} {
+  const customerId = input['customerId'];
+  const message = input['message'];
+  if (typeof customerId !== 'string' || typeof message !== 'string') {
+    throw new Error(
+      'The refund example requires string input fields customerId and message.'
+    );
+  }
+  return { customerId, message };
 }
 
 function buildRun(
-  task: EvalTask,
+  userMessage: string,
   toolCalls: ToolCall[],
-  result: RunResult
-): AgentRun {
+  output: { [key: string]: JsonValue }
+): SystemRun {
   const transcript: TranscriptEvent[] = [
-    { role: 'user', content: task.input.message },
+    { role: 'user', content: userMessage },
     ...toolCalls.flatMap((call): TranscriptEvent[] => [
       { role: 'assistant', content: `Calling ${call.name}`, toolCall: call },
       { role: 'tool', content: `${call.name} completed` },
     ]),
-    { role: 'assistant', content: outputText(result.output) },
+    { role: 'assistant', content: outputText(output) },
   ];
   return {
-    output: result.output,
-    outcome: result.outcome,
+    output,
     transcript,
-    toolCalls,
     metrics: {
-      latencyMs: Math.max(1, Math.round(performance.now() - result.startedAt)),
-      inputTokens: 180,
-      outputTokens: 72,
+      inputTokens: 0,
+      outputTokens: 0,
       costUsd: 0,
       turns: toolCalls.length + 1,
+      usageSource: 'example-rule-agent:no-model-provider',
     },
   };
 }
 
-function outputText(output: JsonValue): string {
-  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
-    const message = output['message'];
-    if (typeof message === 'string') return message;
-  }
-  return JSON.stringify(output);
+function outputText(output: { [key: string]: JsonValue }): string {
+  const message = output['message'];
+  return typeof message === 'string' ? message : JSON.stringify(output);
 }

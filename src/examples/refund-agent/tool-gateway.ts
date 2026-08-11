@@ -12,76 +12,24 @@ export interface RefundToolGateway {
   requestOrderDetails(fields: ['orderId']): Promise<void>;
 }
 
-const demoOrders: Record<string, OrderRecord> = {
-  '42': {
-    orderId: '42',
-    customerId: 'customer-100',
-    amount: 49,
-    ageDays: 45,
-    duplicateCharge: true,
-  },
-  '77': {
-    orderId: '77',
-    customerId: 'customer-200',
-    amount: 85,
-    ageDays: 180,
-    duplicateCharge: false,
-  },
-};
-
-export class InMemoryRefundToolGateway implements RefundToolGateway {
-  verifyIdentity(customerId: string): Promise<void> {
-    if (!customerId.startsWith('customer-')) {
-      return Promise.reject(new Error('Identity verification failed.'));
-    }
-    return Promise.resolve();
-  }
-
-  fetchOrder(orderId: string): Promise<OrderRecord> {
-    const order = demoOrders[orderId];
-    return order
-      ? Promise.resolve(order)
-      : Promise.reject(new Error(`Order ${orderId} was not found.`));
-  }
-
-  fetchPolicy(
-    policy: 'duplicate-charge' | 'refund-window'
-  ): Promise<{ refundWindowDays: number }> {
-    return Promise.resolve({
-      refundWindowDays: policy === 'refund-window' ? 30 : 0,
-    });
-  }
-
-  processRefund(orderId: string, amount: number): Promise<void> {
-    return orderId.length > 0 && amount > 0
-      ? Promise.resolve()
-      : Promise.reject(new Error('A refund requires an order and amount.'));
-  }
-
-  sendConfirmation(channel: 'email'): Promise<void> {
-    return channel === 'email'
-      ? Promise.resolve()
-      : Promise.reject(new Error('Unsupported confirmation channel.'));
-  }
-
-  escalateToHuman(reason: 'outside-refund-window'): Promise<void> {
-    return reason === 'outside-refund-window'
-      ? Promise.resolve()
-      : Promise.reject(new Error('Unsupported escalation reason.'));
-  }
-
-  requestOrderDetails(fields: ['orderId']): Promise<void> {
-    return fields[0] === 'orderId'
-      ? Promise.resolve()
-      : Promise.reject(new Error('Unsupported information request.'));
-  }
+export interface HttpRefundToolGatewayOptions {
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
 }
 
 export class HttpRefundToolGateway implements RefundToolGateway {
   readonly #baseUrl: string;
+  readonly #timeoutMs: number;
+  readonly #fetch: typeof fetch;
 
-  constructor(baseUrl: string) {
-    this.#baseUrl = baseUrl.replace(/\/$/u, '');
+  constructor(baseUrl: string, options: HttpRefundToolGatewayOptions = {}) {
+    const parsed = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Refund tool URL must use HTTP or HTTPS.');
+    }
+    this.#baseUrl = parsed.toString().replace(/\/$/u, '');
+    this.#timeoutMs = options.timeoutMs ?? 5_000;
+    this.#fetch = options.fetchImpl ?? fetch;
   }
 
   async verifyIdentity(customerId: string): Promise<void> {
@@ -89,13 +37,25 @@ export class HttpRefundToolGateway implements RefundToolGateway {
   }
 
   async fetchOrder(orderId: string): Promise<OrderRecord> {
-    return this.#request<OrderRecord>(`/orders/${encodeURIComponent(orderId)}`);
+    const value = await this.#request(`/orders/${encodeURIComponent(orderId)}`);
+    if (!isOrderRecord(value)) {
+      throw new Error(
+        'Tool response for fetch_order failed runtime validation.'
+      );
+    }
+    return value;
   }
 
-  fetchPolicy(
+  async fetchPolicy(
     policy: 'duplicate-charge' | 'refund-window'
   ): Promise<{ refundWindowDays: number }> {
-    return this.#request(`/policies/${policy}`);
+    const value = await this.#request(`/policies/${policy}`);
+    if (!isRecord(value) || !isNonNegativeNumber(value['refundWindowDays'])) {
+      throw new Error(
+        'Tool response for fetch_policy failed runtime validation.'
+      );
+    }
+    return { refundWindowDays: value['refundWindowDays'] };
   }
 
   async processRefund(orderId: string, amount: number): Promise<void> {
@@ -122,12 +82,59 @@ export class HttpRefundToolGateway implements RefundToolGateway {
     });
   }
 
-  async #request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.#baseUrl}${path}`, init);
-    if (!response.ok) {
-      throw new Error(`Tool request ${path} failed with ${response.status}.`);
+  async #request(path: string, init?: RequestInit): Promise<unknown> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    try {
+      const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(
+          `Tool request ${path} failed with HTTP ${response.status}${detail ? `: ${detail.trim()}` : '.'}`
+        );
+      }
+      if (response.status === 204) return undefined;
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Tool response ${path} was not JSON.`);
+      }
+      return await response.json();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(
+          `Tool request ${path} timed out after ${this.#timeoutMs} ms.`,
+          { cause: error }
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
   }
+}
+
+function isOrderRecord(value: unknown): value is OrderRecord {
+  return (
+    isRecord(value) &&
+    typeof value['orderId'] === 'string' &&
+    typeof value['customerId'] === 'string' &&
+    isPositiveNumber(value['amount']) &&
+    isNonNegativeNumber(value['ageDays']) &&
+    typeof value['duplicateCharge'] === 'boolean'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }

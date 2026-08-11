@@ -1,12 +1,12 @@
 # Eval Pyramid Starter
 
-An executable reference for testing LLM applications and agents with the same progression used in mature software testing: many fast component checks, fewer boundary scenarios, and a small number of black-box system tests.
+An executable TypeScript reference for testing LLM applications and agents with the same progression used in mature software testing: many component checks, fewer real boundary tests, and a small black-box system layer.
 
-The repository follows one realistic refund workflow through every layer. It runs offline with synthetic data, real orchestration, observable tool calls, release metrics, an optional calibrated model judge, and a human review queue.
+The repository follows one refund workflow through every layer. The offline example starts a real application server and a separate tool service on ephemeral localhost ports. Tool actions mutate trial-scoped state on disk. The harness reads that state through an observer endpoint, measures wall-clock latency itself, applies release gates, and writes reviewable evidence. Nothing depends on an injected trial-number failure.
 
 ## Quick start
 
-Requirements: Node.js 22.13 or a current release from Node.js 24 onward, plus npm.
+Requirements: Node.js 22.13 or a current Node.js 24 release, plus npm.
 
 ```bash
 git clone https://github.com/bharadwaj-pendyala/eval-pyramid-starter.git
@@ -16,98 +16,111 @@ npx playwright install chromium
 npm run test:pyramid
 ```
 
-That command runs the complete evidence ladder. To inspect the generated system report:
+Inspect the latest system report with:
 
 ```bash
 npm run report:serve
 ```
 
-The generated report includes aggregate reliability, per-trial results, failures, and a JSONL queue for human review. Generated reports are ignored by Git because they can contain application data.
+Every run is retained under `reports/runs/<run-id>`. `reports/latest` is a convenient copy of the newest run. Reports, local calibration records, review decisions, coverage, and installed dependencies are ignored by Git because they may contain application data.
 
 ## The executable pyramid
 
-| Scope             | Framework             | What is real                                                                      | What is replaced                 | Example                                                                                            |
-| ----------------- | --------------------- | --------------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Component         | Vitest                | Refund policy and deterministic grader code                                       | Network, model, and tools        | [`tests/unit/refund-domain.test.ts`](tests/unit/refund-domain.test.ts)                             |
-| Scenario boundary | Vitest + MSW          | Agent orchestration, HTTP client, task contract, graders, and reports             | Remote tool services             | [`tests/integration/refund-tool-contract.test.ts`](tests/integration/refund-tool-contract.test.ts) |
-| Black-box system  | Eval CLI + Playwright | Fixtures through agent, tools, grades, release gate, report files, and browser UI | Production data and side effects | [`tests/e2e/report.spec.ts`](tests/e2e/report.spec.ts)                                             |
+| Scope       | Framework                          | Boundary proved                                                                                                       | Example                                                                                            |
+| ----------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Component   | Vitest                             | Pure policy, parsing, grader, metric, and redaction behavior                                                          | [`tests/unit/refund-domain.test.ts`](tests/unit/refund-domain.test.ts)                             |
+| Integration | Vitest plus real Node HTTP servers | Consumer and provider contracts, runtime validation, persisted tool state, and a complete scenario over TCP           | [`tests/integration/refund-tool-contract.test.ts`](tests/integration/refund-tool-contract.test.ts) |
+| System      | Public eval CLI plus Playwright    | Tasks through application server, tool service, observer, graders, gates, report files, report server, and browser UI | [`tests/e2e/report.spec.ts`](tests/e2e/report.spec.ts)                                             |
 
-Test scope and verdict method are separate axes. Vitest, MSW, and Playwright determine how much of the system executes. Deterministic assertions, model judges, and human review determine how evidence receives a verdict. A model judge is not automatically an end-to-end test.
+Test scope and verdict method are separate axes. Vitest and Playwright determine how much of the system executes. Deterministic assertions, calibrated model judges, and human decisions determine how evidence receives a verdict. Calling an LLM judge does not make a component test end-to-end.
 
-The refund slice covers three consequential paths: a duplicate charge that must be refunded and confirmed, an old order that must not trigger a financial action, and a request missing its order identifier. See [The executable eval pyramid](docs/EVAL-PYRAMID.md) for the layer boundaries, Java equivalents, and guidance for adapting the pattern.
+The refund slice covers three consequential paths: a duplicate charge that must be refunded and confirmed, an old order that must not trigger a financial action, and a request missing its order identifier. The financial paths are marked `critical`, so one failure blocks the release even when aggregate rates remain high.
 
-## What is included
+## Real evidence flow
 
 ```text
-evals/                  Versioned task fixtures and judge golden set
-src/adapters/           Offline and OpenAI judge adapters
-src/examples/           Runnable refund agent, domain policy, and tool gateways
-src/graders/            Deterministic and rubric graders
-src/harness/            Isolated trial runner, reliability metrics, and reports
-src/reporting/          Redaction and human review utilities
-tests/                  Unit, integration, and browser checks
-.github/workflows/      Pull request and scheduled eval jobs
+task fixture
+  -> application HTTP endpoint
+  -> refund agent
+  -> tool-service HTTP endpoints
+  -> persisted tool state and call log
+  -> independent evidence endpoint
+  -> deterministic graders and optional calibrated judge
+  -> severity-aware release gate
+  -> immutable report and human review queue
 ```
 
-The harness measures two different repeated-use questions with finite-sample estimators:
+The application response contains its output, safe transcript, and provider usage. It cannot award itself credit for side effects. Outcome and tool-call evidence come from the separate observer. The harness replaces any application latency claim with its own wall-clock measurement. A configured cost budget fails closed when the provider does not report cost.
+
+## Commands
+
+```bash
+npm run eval:deterministic                 # One real HTTP trial per checked-in task
+npm run eval:repeat -- --trials 20 --k 3  # Fresh application and tool state per trial
+npm run eval:ci                            # Offline, release-gated lane used in CI
+npm run eval:judge                         # Calibrate the OpenAI judge against human labels
+npm run eval:live                          # Evaluate your HTTP SUT with the calibrated judge
+npm run eval:review -- list                # List pending decisions from the latest run
+npm run eval:review -- adjudicate --task TASK --trial 0 --score 0.5 --notes "Reason"
+npm run eval:review -- export              # Export decisions as calibration candidates
+npm run test:unit
+npm run test:integration
+npm run test:system
+npm run test:pyramid
+npm run verify
+```
+
+The local rule-based example is intentionally stable, so repeated local runs should pass. It proves trial isolation, evidence collection, reliability calculation, and reporting. Use `eval:live` against a stochastic model-backed application to measure actual model reliability. Do not manufacture alternating failures to make the chart interesting.
+
+The harness reports two different repeated-use questions:
 
 ```text
 pass@k = 1 - C(n - c, k) / C(n, k)   at least one of k attempts succeeds
 pass^k = C(c, k) / C(n, k)           all k attempts succeed
 ```
 
-Here, `n` is the number of trials and `c` is the number that passed. The finite estimators sample without replacement from the observed trials. They are not confidence intervals and do not replace uncertainty analysis.
+Here, `n` is the number of fresh trials and `c` is the number that passed. The estimators sample without replacement from observed trials. They are not confidence intervals and do not prove independence.
 
-## Commands
+## Connect a real model application
 
-```bash
-npm run eval:deterministic                 # One offline trial per task
-npm run eval:repeat -- --trials 20 --k 3  # Repeated offline trials
-npm run eval:judge                         # Calibrate the offline judge
-npm run eval:ci                            # Release-gated eval used in automation
-npm run eval:review                        # Count queued human reviews
-npm run test:unit                          # Fast Vitest component checks
-npm run test:integration                   # Vitest + MSW boundary scenarios
-npm run test:system                        # Generate and inspect the report with Playwright
-npm run test:pyramid                       # Run all three layers in order
-npm run test                               # All Vitest component and integration checks
-npm run test:e2e                           # Alias for test:system
-npm run verify                             # Format, types, lint, coverage, and build
+The live lane is provider-neutral. Your application implements a run endpoint, and a separately controlled service implements an evidence endpoint. Set both URLs in `.env`:
+
+```dotenv
+EVAL_SUT_RUN_URL=https://staging.example.com/eval/run
+EVAL_EVIDENCE_URL=https://eval-observer.example.com/eval/evidence
+OPENAI_API_KEY=your-local-or-ci-secret
+OPENAI_JUDGE_MODEL=gpt-5-mini
 ```
 
-`eval:ci` exits unsuccessfully when a configured threshold is missed. Thresholds, concurrency, task paths, and report paths live in [`eval.config.ts`](eval.config.ts).
+Then run:
 
-## Adapt it to your application
+```bash
+npm run eval:judge
+npm run eval:live
+```
 
-1. Replace the examples in [`evals/tasks.jsonl`](evals/tasks.jsonl) while keeping them synthetic or properly de-identified.
-2. Implement `SystemUnderTest` and `SystemUnderTestFactory` from [`src/types.ts`](src/types.ts). The trial context gives each run a separate temporary workspace.
-3. Point the CLI at your factory, then add deterministic graders before adding model-judged criteria.
-4. Build a human-scored golden set for every model judge and run calibration before trusting its scores.
-5. Set release thresholds from a reviewed baseline. Do not copy the example values into production without evidence.
+`eval:judge` stores a local calibration record with the provider, model, golden-set SHA-256, result, and timestamp. `eval:live` refuses to start when that record failed, is older than seven days, targets another model, or no longer matches the golden set. The OpenAI key is read only from the environment and never written to a report.
 
-The included OpenAI judge is optional. Set `OPENAI_API_KEY`, optionally set `OPENAI_JUDGE_MODEL`, and run `tsx src/cli.ts calibrate --judge openai`. The system-under-test interface itself has no provider dependency.
+The checked-in fake signal matcher exists only as a unit-test double. It fails the semantic golden set and is not available from the public CLI or package exports.
 
-See [Adapting the starter](docs/ADAPTING.md) for the contract, [The executable eval pyramid](docs/EVAL-PYRAMID.md) for test placement, and [Design and limits](docs/DESIGN.md) for deliberate tradeoffs.
+See [Adapting the starter](docs/ADAPTING.md) for the HTTP contracts, [The executable eval pyramid](docs/EVAL-PYRAMID.md) for test placement, and [Design and limits](docs/DESIGN.md) for remaining tradeoffs.
 
 ## Safety boundaries
 
 - Keep production conversations, credentials, and personal data out of fixtures.
-- Treat model output as untrusted. The HTML report escapes dynamic values and the report writer redacts common secret fields, email addresses, bearer tokens, and OpenAI-style API keys.
-- Replace the example redactor with controls appropriate to your data classification. Pattern matching cannot guarantee that arbitrary private data is removed.
-- Keep side-effecting tools sandboxed in eval environments. The default in-memory gateway never touches an external system, and the integration test intercepts all tool HTTP traffic with MSW.
-- Model judges can be biased, inconsistent, or prompt-injected. Calibrate them against human labels and retain a human queue.
+- Point side-effecting evals at a disposable tenant, namespace, database, or sandbox. Never use production financial tools.
+- Treat model output as untrusted. The HTML report escapes dynamic values and report persistence redacts common secret fields, email addresses, bearer tokens, and OpenAI-style keys.
+- Treat redaction as defense in depth, not a data-loss-prevention guarantee.
+- Keep the SUT and observer independently controlled. An observer that simply echoes the SUT response defeats the evidence boundary.
+- Model judges can be biased, inconsistent, and prompt-injected. Calibrate them, fail closed on missing scores, and retain human decisions.
 
-Read [`SECURITY.md`](SECURITY.md) and [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before connecting real tools or model providers.
+Read [`SECURITY.md`](SECURITY.md) and [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before connecting real tools or providers.
 
 ## Companion series
 
-This repository is the runnable companion to the three-part Eval Pyramid series:
-
-- [The Eval Pyramid](https://bharad.dev/blog/eval-pyramid) explains what belongs at each layer.
-- [Measuring Agent Reliability](https://bharad.dev/blog/measuring-agent-reliability) separates single-attempt quality from repeated-use reliability.
-- [Build the Eval Pyramid](https://bharad.dev/blog/build-the-eval-pyramid) walks through this implementation and its tradeoffs.
-
-Each article links back here so the explanation and executable reference stay connected.
+- [The Eval Pyramid](https://bharad.dev/blog/eval-pyramid)
+- [Measuring Agent Reliability](https://bharad.dev/blog/measuring-agent-reliability)
+- [Build the Eval Pyramid](https://bharad.dev/blog/build-the-eval-pyramid)
 
 ## Contributing and license
 

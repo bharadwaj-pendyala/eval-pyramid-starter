@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 import type {
   AgentRun,
@@ -13,7 +14,8 @@ export async function calibrateJudge(
   goldenSetFile = 'evals/judge-golden-set.jsonl',
   tolerance = 0.25
 ): Promise<CalibrationSummary> {
-  const examples = await loadGoldenSet(goldenSetFile);
+  const contents = await readFile(goldenSetFile, 'utf8');
+  const examples = loadGoldenSet(contents, goldenSetFile);
   const differences: number[] = [];
 
   for (const example of examples) {
@@ -38,12 +40,17 @@ export async function calibrateJudge(
     meanAbsoluteError,
     agreementWithinTolerance,
     tolerance,
+    goldenSetFile,
+    goldenSetSha256: createHash('sha256').update(contents).digest('hex'),
+    calibratedAt: new Date().toISOString(),
     passed: meanAbsoluteError <= tolerance && agreementWithinTolerance >= 0.8,
   };
 }
 
-async function loadGoldenSet(filePath: string): Promise<GoldenJudgeExample[]> {
-  const contents = await readFile(filePath, 'utf8');
+function loadGoldenSet(
+  contents: string,
+  filePath: string
+): GoldenJudgeExample[] {
   const lines = contents
     .split(/\r?\n/u)
     .map((line) => line.trim())
@@ -86,6 +93,7 @@ function calibrationTask(example: GoldenJudgeExample): EvalTask {
   return {
     id: example.id,
     description: 'Judge calibration example with a trusted human score.',
+    severity: 'medium',
     input: { customerId: 'calibration', message: 'Calibration input' },
     expected: { maxTurns: 1 },
     rubric: [example.criterion],
@@ -98,12 +106,15 @@ function calibrationRun(output: string): AgentRun {
     outcome: {},
     transcript: [{ role: 'assistant', content: output }],
     toolCalls: [],
+    evidenceSource: 'calibration-fixture',
     metrics: {
       latencyMs: 0,
       inputTokens: 0,
       outputTokens: 0,
       costUsd: 0,
       turns: 1,
+      latencySource: 'harness-wall-clock',
+      usageSource: 'calibration-fixture',
     },
   };
 }

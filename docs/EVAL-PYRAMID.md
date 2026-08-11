@@ -1,100 +1,105 @@
 # The executable eval pyramid
 
-The pyramid classifies tests by execution scope, not by the type of assertion they use. Each higher layer keeps more real boundaries, costs more to diagnose, and therefore contains fewer cases.
+The pyramid classifies tests by execution scope, not by assertion type. Each higher layer keeps more real boundaries, costs more to run and diagnose, and therefore contains fewer cases.
 
-## Two axes, not one ladder
+## Two axes
 
 An AI system needs two independent decisions:
 
 1. How much of the application should execute?
 2. How should the resulting evidence receive a verdict?
 
-The first decision produces the familiar component, integration, and system pyramid. The second selects deterministic code, a calibrated model judge, or human review.
+| Execution scope | Deterministic verdict                                               | Model-judged verdict           | Human verdict                                  |
+| --------------- | ------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- |
+| Component       | Default for schemas, policies, parsing, tool rules, and metric math | Usually unnecessary            | Used to define expected behavior               |
+| Integration     | Default for state transitions, contracts, safety rules, and budgets | Add only for semantic criteria | Review new and failed scenarios                |
+| System          | Release gates and repeated-use reliability                          | Calibrated rubric scores       | Sample releases and adjudicate uncertain cases |
 
-| Execution scope   | Deterministic verdict                                           | Model-judged verdict           | Human verdict                                  |
-| ----------------- | --------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- |
-| Component         | Default for schemas, policies, parsing, tool rules, and metrics | Usually unnecessary            | Used when defining expected behavior           |
-| Scenario boundary | Default for outcomes, tool contracts, safety rules, and budgets | Add only for semantic criteria | Review new and failed scenarios                |
-| Black-box system  | Release gates and reliability metrics                           | Calibrated rubric scores       | Sample releases and adjudicate uncertain cases |
+Calling a model judge from a unit test does not make that test end-to-end. A Playwright system test can use deterministic verdicts. Scope says what executed. A grader says how evidence was assessed.
 
-This separation matters. Calling an LLM judge from a unit test does not make the test end-to-end, and a Playwright system test can still use only deterministic verdicts.
+## One use case through every layer
 
-## One use case through all three layers
-
-The included refund agent is a vertical slice rather than a collection of unrelated toy tests. Its observable workflow is:
+The refund workflow is:
 
 ```text
 customer request
   -> verify identity
-  -> extract and fetch the order
-  -> fetch the refund policy
-  -> refund and confirm, or escalate safely
-  -> grade output, outcome, tool policy, and budgets
-  -> write release evidence and a human review queue
+  -> fetch the order and policy
+  -> refund and confirm, escalate, or request information
+  -> persist calls and business state outside the application
+  -> observe state through a separate boundary
+  -> grade output, outcome, tool policy, usage, and latency
 ```
 
-The task set includes an eligible duplicate charge, an ineligible old order, and missing order details. These cases exercise a successful financial action, a prohibited financial action, and safe handling of incomplete input.
+The task set covers a valid duplicate-charge refund, a prohibited out-of-window refund, and missing order details. It exercises a successful financial action, prevention of an unsafe action, and safe handling of incomplete input.
 
-### Layer 1: component checks with Vitest
+## Layer 1: component checks with Vitest
 
 [`tests/unit/refund-domain.test.ts`](../tests/unit/refund-domain.test.ts) calls the pure order parser and policy decision directly. It has no filesystem, HTTP, model, report, or tool dependency.
 
-Use this layer for large input tables and exact invariants. A failure should identify a small function and run in milliseconds.
+Use this layer for broad input tables and exact invariants. A failure should name a small function and run in milliseconds.
 
 ```bash
 npm run test:unit
 ```
 
-### Layer 2: scenario boundary checks with Vitest and MSW
+The equivalent Java choices are JUnit 5 or TestNG. The framework is less important than preserving the component boundary.
 
-[`tests/integration/refund-tool-contract.test.ts`](../tests/integration/refund-tool-contract.test.ts) keeps the real agent, HTTP tool client, task loader, deterministic graders, and report writer. MSW replaces only the remote tool services and fails the test on unexpected traffic.
+## Layer 2: integration checks with real provider boundaries
 
-The scenario verifies both sides of the boundary. The agent must produce the correct eval outcome, and its HTTP requests must carry the expected identity, order, amount, and confirmation channel. This is the eval equivalent of a service integration or consumer contract test.
+[`tests/integration/refund-tool-contract.test.ts`](../tests/integration/refund-tool-contract.test.ts) starts the actual tool provider on an ephemeral TCP port and calls it through the production HTTP gateway. It verifies request semantics, runtime response validation, ownership enforcement, state mutation, and persisted evidence. A malformed response comes from a real HTTP server and is rejected at the consumer boundary.
+
+[`tests/integration/run-suite.test.ts`](../tests/integration/run-suite.test.ts) starts the application server and tool server for each trial, runs all tasks through HTTP, observes persisted state, grades the records, and verifies immutable reports.
 
 ```bash
 npm run test:integration
 ```
 
-MSW provides an executable consumer-side contract. When a separate team owns the tool API and provider compatibility must be independently verified, publish an OpenAPI schema or add Pact verification instead of treating an HTTP mock as proof that the provider still conforms.
+This is stronger than an HTTP interception test because both consumer and provider code execute over a real socket. When different teams or repositories own the services, add a published OpenAPI contract or Pact consumer and provider verification to the same layer. A mock by itself does not prove that the deployed provider conforms.
 
-### Layer 3: black-box system checks with Playwright
+The Java equivalents are JUnit 5 plus a real embedded service, Testcontainers, WireMock for targeted client behavior, and Pact JVM for cross-team contracts.
 
-[`tests/e2e/report.spec.ts`](../tests/e2e/report.spec.ts) starts from a report generated by the public CLI. Playwright inspects the release gate and all three scenario rows in desktop and mobile browsers. The path includes JSONL fixtures, agent execution, tool calls, graders, metrics, report persistence, the report server, and the browser UI.
+## Layer 3: black-box checks with the CLI and Playwright
+
+`npm run test:system` first invokes the public eval CLI. Every trial enters through an HTTP application endpoint, crosses the HTTP tool provider, reads external evidence, evaluates release gates, and writes a report. [`tests/e2e/report.spec.ts`](../tests/e2e/report.spec.ts) then inspects the served report in desktop and mobile Chromium.
 
 ```bash
 npm run test:system
 ```
 
-Keep this layer small. It answers whether the shipped workflow operates as a whole, not which branch of policy code is wrong.
+This layer answers whether the shipped workflow operates as a whole. Keep it small. Branch-heavy policy behavior belongs at the component layer, while boundary failure modes belong in integration.
 
-## Framework choices
+The Java equivalents are Playwright for Java or Selenium for browser behavior, plus a public API or CLI entry point for the system setup.
 
-This repository chooses one complete TypeScript stack so that every example stays runnable:
+## Real failure paths
 
-| Purpose                      | TypeScript reference | Java equivalent                 |
-| ---------------------------- | -------------------- | ------------------------------- |
-| Component checks             | Vitest               | JUnit 5 or TestNG               |
-| HTTP boundary simulation     | MSW                  | WireMock                        |
-| Published consumer contracts | Pact JS, when needed | Pact JVM                        |
-| Browser and API system tests | Playwright           | Playwright for Java or Selenium |
+The public eval commands do not accept `--failure-every` or any other score-shaping switch. The example's business failures come from real inputs and provider rules. Integration resilience cases use actual malformed HTTP responses, ownership conflicts, unavailable observers, and failed transports.
 
-The framework names are replaceable. The important part is the boundary: components have no I/O, integration tests cross one controlled seam, and system tests enter through a public interface.
+Harness unit tests still use small test doubles to prove cleanup and error handling. Those tests measure the harness itself. They are not presented as model reliability data.
 
-## What belongs where
+The local rule-based application should produce 100 percent reliability. Repeated runs are still useful for proving fresh trial environments and report math. Reliability variance becomes meaningful after `eval:live` connects to a stochastic model-backed SUT.
 
-Put parsing, schema rules, metric math, redaction, and policy decisions in component tests. Put tool request and response contracts, persistence adapters, retrieval boundaries, and complete single-task scenarios in integration tests. Put CLI behavior, deployment smoke tests, repeated-use reliability, report usability, and release gates in system tests.
+## Verdict methods
 
-Do not repeat every scenario at every layer. Promote only a few representative and high-risk paths upward. Keep most edge cases at the lowest layer that can prove the behavior.
+Use deterministic graders for anything a program can establish exactly:
 
-## From offline demo to a real model
+- output JSON Schema;
+- final database or workflow state;
+- required and forbidden tool calls;
+- latency measured by the harness;
+- provider-reported cost and token usage;
+- critical-task safety invariants.
 
-The default `RefundAgentFactory` uses an in-memory tool gateway so the repository is deterministic and needs no credentials. To evaluate a model-backed application:
+Use a model judge only for atomic semantic criteria that cannot be made deterministic. The checked-in OpenAI adapter uses strict structured output, timeouts, bounded retries, and an instruction that treats task and output text as untrusted evidence. A live judged run requires a passing calibration record for the same model and current golden set.
 
-1. Implement `SystemUnderTestFactory` around the real application entry point.
-2. Keep the `EvalTask` fixtures and deterministic graders unchanged at first.
-3. Use MSW, WireMock, or a disposable tool environment to control side effects in integration.
-4. Add rubric criteria only for behavior that deterministic evidence cannot establish.
-5. Calibrate every model judge against human-scored examples before using its output in a release gate.
-6. Run repeated trials at the system layer and retain failed or uncertain cases for review.
+Use human review to adjudicate failed or unknown trials. Decisions are append-only under `reports/reviews`, do not mutate the original run, and can be exported as calibration candidates.
 
-This progression shows whether a failure came from business policy, a boundary contract, stochastic application behavior, judging, or report delivery. That diagnostic separation is the practical value of the pyramid.
+## pass@k and pass^k
+
+`pass@k` asks whether at least one of `k` attempts will work. It is appropriate when a product can retry and select a valid result. `pass^k` asks whether all `k` attempts work. It is appropriate when every attempt must be dependable.
+
+Each sampled trial in this repository receives a fresh application server, tool server, temporary workspace, and state file. The estimators describe those isolated attempts. They do not model a sequential retry conversation or shared-session recovery.
+
+## Placement rule
+
+Put a test at the lowest layer that can prove the behavior, then promote only representative or high-risk paths upward. This keeps failures diagnostic while preserving a small set of black-box proofs.

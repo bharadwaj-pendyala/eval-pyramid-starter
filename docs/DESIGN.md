@@ -2,23 +2,36 @@
 
 ## Design choices
 
-The starter uses one typed task contract across every layer. Deterministic graders run before optional model-judged rubrics, but both retain their evidence in the same trial record. Repeated trials are isolated by a fresh adapter and temporary workspace.
+The starter separates system output from observed evidence. `SystemUnderTest` returns output, a safe transcript, and provider usage. `EvidenceObserver` returns tool calls and business state from another boundary. The harness measures latency itself and combines both records only after execution.
 
-Execution scope and verdict method are deliberately independent. Vitest component tests, MSW-backed scenario tests, and Playwright system tests define how much code and infrastructure execute. Deterministic graders, calibrated model judges, and human review define how the resulting evidence is assessed. See [The executable eval pyramid](EVAL-PYRAMID.md).
+The offline reference uses real ephemeral HTTP servers at integration and system scope. The tool provider enforces ownership, mutates state, and persists a call log inside a unique trial workspace. Runtime validators reject malformed application, evidence, order, and policy responses.
 
-Reports are local artifacts in JSON, JSONL, Markdown, and self-contained HTML. This keeps the reference implementation inspectable and avoids coupling the harness to an eval vendor.
+Execution scope and verdict method remain independent. Vitest component and integration tests plus a Playwright system test define how much code executes. Deterministic graders, a calibrated OpenAI judge, and durable human decisions define how evidence is assessed.
 
-The optional OpenAI judge uses a strict structured response. It is an example adapter, not a recommendation that one provider or model is correct for every rubric.
+Every report records configuration, task-set SHA-256, SUT identity, observer identity, judge identity, and source revision when Git is available. Run directories are immutable. `reports/latest` is a replaceable convenience copy.
+
+The public CLI exposes a provider-neutral HTTP SUT mode. OpenAI is an optional judge adapter, not a required SUT provider and not a recommendation for every rubric.
+
+## Fail-closed behavior
+
+- A required judge with no score fails its gate.
+- A configured cost budget with no provider-reported cost fails its grader.
+- Missing or malformed external evidence fails the trial.
+- A critical task failure blocks the release regardless of aggregate rates.
+- A self-reported evidence source fails the independent-evidence gate.
+- A judged live run cannot start without a current passing calibration for the same model and golden set.
 
 ## Deliberate limits
 
-- The default adapter is deterministic unless `failureEvery` injects a known failure. Replace it before using the results to characterize a real model.
-- Trial time budgets are graded from reported latency. The harness does not forcibly terminate an adapter, so production adapters need their own request and tool timeouts.
-- The finite `pass@k` and `pass^k` estimators describe samples without replacement. They do not establish causality, independence, or confidence bounds.
-- Redaction is defense in depth, not a data-loss-prevention system. Use synthetic inputs and apply organization-specific controls before retaining reports.
-- The fake judge demonstrates calibration mechanics with explicit text signals. It is not a semantic quality judge.
-- Aggregate pass rates can hide high-severity failures. Add task-level and severity-specific gates for consequential applications.
+- The checked-in application is rule-based. It proves execution mechanics but does not claim model reliability. Use the remote HTTP mode for a real model application.
+- The harness timeout is enforced by HTTP adapters. An in-process custom SUT must implement its own cancellation if it can hang.
+- The finite `pass@k` and `pass^k` estimators describe observed samples without replacement. They do not establish causality, independence, or confidence bounds.
+- Trial environments are fresh and independent. The starter does not model retries inside one shared conversation.
+- Redaction is defense in depth, not a data-loss-prevention system. Use synthetic inputs and organization-specific controls.
+- The OpenAI judge uses bounded retries and strict output validation, but model judges can still be biased or vulnerable to adversarial evidence.
+- The review export produces candidates. It does not automatically alter the trusted golden set.
+- Cross-repository provider ownership still benefits from OpenAPI publication or Pact consumer and provider verification.
 
 ## Why there is no hidden trace grader
 
-The harness records observable transcripts and tool calls, but it does not request private chain-of-thought. Graders should evaluate final outputs, state transitions, and auditable actions. This produces evidence users can retain, debug, and govern.
+The harness records observable transcripts and tool calls, but it does not request private chain-of-thought. Graders evaluate final output, durable state transitions, provider usage, and auditable actions. This is evidence teams can retain, debug, and govern.

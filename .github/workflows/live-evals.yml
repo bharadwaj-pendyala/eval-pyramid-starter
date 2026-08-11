@@ -1,0 +1,42 @@
+name: Manual live evals
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: eval-staging
+    env:
+      EVAL_SUT_RUN_URL: ${{ secrets.EVAL_SUT_RUN_URL }}
+      EVAL_EVIDENCE_URL: ${{ secrets.EVAL_EVIDENCE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_JUDGE_MODEL: ${{ vars.OPENAI_JUDGE_MODEL || 'gpt-5-mini' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Require live environment configuration
+        run: |
+          test -n "$EVAL_SUT_RUN_URL"
+          test -n "$EVAL_EVIDENCE_URL"
+          test -n "$OPENAI_API_KEY"
+      - run: npm run eval:judge
+      - run: npm run eval:live
+      - name: Upload live eval evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-report
+          path: |
+            reports/latest
+            reports/calibration
+          if-no-files-found: warn
+          retention-days: 14

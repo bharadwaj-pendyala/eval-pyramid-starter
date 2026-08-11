@@ -29,7 +29,7 @@ describe('task loader', () => {
 
   it('reports a malformed JSONL line', async () => {
     const task =
-      '{"id":"valid","description":"A valid task record.","input":{"customerId":"1","message":"hello"},"expected":{"maxTurns":1}}';
+      '{"id":"valid","description":"A valid task record.","severity":"medium","input":{"prompt":"hello"},"expected":{"maxTurns":1}}';
     const path = await temporaryFile(`${task}\nnot-json\n`);
 
     await expect(loadTasks(path)).rejects.toThrow('Invalid JSON on line 2');
@@ -37,7 +37,7 @@ describe('task loader', () => {
 
   it('rejects duplicate task identifiers', async () => {
     const task =
-      '{"id":"duplicate","description":"A duplicate task record.","input":{"customerId":"1","message":"hello"},"expected":{"maxTurns":1}}';
+      '{"id":"duplicate","description":"A duplicate task record.","severity":"medium","input":{"prompt":"hello"},"expected":{"maxTurns":1}}';
     const path = await temporaryFile(`${task}\n${task}\n`);
 
     await expect(loadTasks(path)).rejects.toThrow(

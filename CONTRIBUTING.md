@@ -19,6 +19,7 @@ Place a test at the lowest layer that can prove its behavior. Component tests mu
 
 - Use synthetic or properly de-identified data.
 - Give every task a stable, unique identifier.
+- Assign every task a reviewed severity.
 - Prefer deterministic expected outcomes and tool policies before subjective rubrics.
 - Add boundary cases and prohibited actions, not only happy paths.
 - Do not weaken a threshold only to make a failing change pass.
@@ -26,6 +27,8 @@ Place a test at the lowest layer that can prove its behavior. Component tests mu
 ## Judge changes
 
 A judge adapter must return the typed `JudgeScore` contract and fail closed on invalid output. Add or update human-scored examples in `evals/judge-golden-set.jsonl`, document the tolerance, and demonstrate calibration in the pull request.
+
+Do not add score-shaping failure switches to public eval commands. Resilience tests should exercise a real broken boundary, such as a malformed provider response or unavailable observer. Small test doubles remain appropriate for unit-testing the harness itself.
 
 ## Security reports
 

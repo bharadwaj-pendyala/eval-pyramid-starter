@@ -1,18 +1,53 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { redactText, redactUnknown } from '../reporting/redact.js';
-import type { EvalSummary, TrialRecord } from '../types.js';
+import type { EvalSummary, Grade, TrialRecord } from '../types.js';
+
+export interface ReportLocations {
+  runDirectory: string;
+  latestDirectory: string;
+}
 
 export async function writeReports(
+  reportRoot: string,
+  summary: EvalSummary,
+  records: TrialRecord[]
+): Promise<ReportLocations> {
+  if (!/^[a-zA-Z0-9._-]+$/u.test(summary.runId)) {
+    throw new Error(
+      'runId may contain only letters, numbers, dot, underscore, and hyphen.'
+    );
+  }
+  const runDirectory = join(reportRoot, 'runs', summary.runId);
+  const latestDirectory = join(reportRoot, 'latest');
+  const latestTemporary = join(
+    reportRoot,
+    `.latest-${summary.runId}-${process.pid}`
+  );
+  await mkdir(join(reportRoot, 'runs'), { recursive: true });
+  await mkdir(runDirectory, { recursive: false });
+  await writeReportSet(runDirectory, summary, records);
+  await rm(latestTemporary, { recursive: true, force: true });
+  await mkdir(latestTemporary, { recursive: false });
+  try {
+    await writeReportSet(latestTemporary, summary, records);
+    await rm(latestDirectory, { recursive: true, force: true });
+    await rename(latestTemporary, latestDirectory);
+  } finally {
+    await rm(latestTemporary, { recursive: true, force: true });
+  }
+  return { runDirectory, latestDirectory };
+}
+
+async function writeReportSet(
   directory: string,
   summary: EvalSummary,
   records: TrialRecord[]
 ): Promise<void> {
-  await mkdir(directory, { recursive: true });
   const safeSummary = redactUnknown(summary);
   const safeRecords = records.map((record) => redactUnknown(record));
-  const reviewQueue = buildReviewQueue(records).map((entry) =>
+  const reviewQueue = buildReviewQueue(summary.runId, records).map((entry) =>
     redactUnknown(entry)
   );
 
@@ -44,7 +79,9 @@ export async function writeReports(
 }
 
 interface ReviewQueueEntry {
+  runId: string;
   taskId: string;
+  severity: string;
   trialIndex: number;
   reasons: string[];
   output: unknown;
@@ -52,7 +89,10 @@ interface ReviewQueueEntry {
   notes: string;
 }
 
-function buildReviewQueue(records: TrialRecord[]): ReviewQueueEntry[] {
+function buildReviewQueue(
+  runId: string,
+  records: TrialRecord[]
+): ReviewQueueEntry[] {
   return records
     .filter(
       (record) =>
@@ -60,7 +100,9 @@ function buildReviewQueue(records: TrialRecord[]): ReviewQueueEntry[] {
         record.grades.some((grade) => grade.rationale.startsWith('Unknown:'))
     )
     .map((record) => ({
+      runId,
       taskId: record.taskId,
+      severity: record.severity,
       trialIndex: record.trialIndex,
       reasons: record.grades
         .filter((grade) => !grade.passed)
@@ -80,7 +122,7 @@ function failureMarkdown(records: TrialRecord[]): string {
       .filter((grade) => !grade.passed)
       .map((grade) => `- ${grade.grader}: ${grade.rationale}`)
       .join('\n');
-    return `## ${redactText(record.taskId)}, trial ${record.trialIndex + 1}\n\n${redactText(reasons)}`;
+    return `## ${redactText(record.taskId)}, trial ${record.trialIndex + 1}\n\nSeverity: ${record.severity}\n\nEvidence: ${redactText(record.run.evidenceSource)}\n\n${redactText(reasons)}`;
   });
   return `# Failures\n\n${sections.join('\n\n')}\n`;
 }
@@ -90,17 +132,22 @@ function reportHtml(summary: EvalSummary, records: TrialRecord[]): string {
     .map(
       (record) => `<tr>
 <td>${escapeHtml(redactText(record.taskId))}</td>
+<td>${escapeHtml(record.severity)}</td>
 <td>${record.trialIndex + 1}</td>
 <td><span class="status ${record.passed ? 'pass' : 'fail'}">${record.passed ? 'pass' : 'fail'}</span></td>
-<td>${formatPercent(average(record.grades.map((grade) => grade.score)))}</td>
-<td>${escapeHtml(
-        redactText(
-          record.grades
-            .filter((grade) => !grade.passed)
-            .map((grade) => grade.grader)
-            .join(', ') || 'none'
-        )
-      )}</td>
+<td>${escapeHtml(gradeStatus(record.grades))}</td>
+<td>${escapeHtml(redactText(record.run.evidenceSource))}</td>
+<td>${recordDetails(record)}</td>
+</tr>`
+    )
+    .join('\n');
+  const checks = summary.releaseGate.checks
+    .map(
+      (check) => `<tr>
+<td>${escapeHtml(check.name)}</td>
+<td>${check.actual === null ? 'missing' : formatPercent(check.actual)}</td>
+<td>${formatPercent(check.required)}</td>
+<td><span class="status ${check.passed ? 'pass' : 'fail'}">${check.passed ? 'pass' : 'fail'}</span></td>
 </tr>`
     )
     .join('\n');
@@ -113,7 +160,7 @@ function reportHtml(summary: EvalSummary, records: TrialRecord[]): string {
 <title>Eval Pyramid Report</title>
 <style>
 :root{color-scheme:light dark;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.5;--accent:#6366f1;--border:#94a3b8}
-body{max-width:72rem;margin:0 auto;padding:2rem 1rem}h1,h2{line-height:1.2}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:1rem}.card{border:1px solid var(--border);border-radius:.6rem;padding:1rem}.value{display:block;font-size:1.6rem;font-weight:700}.pass{color:#15803d}.fail{color:#b91c1c}.status{font-weight:700}table{border-collapse:collapse;width:100%;margin-top:1rem}th,td{border-bottom:1px solid var(--border);padding:.65rem;text-align:left}th{color:var(--accent)}.table-wrap{overflow-x:auto}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}@media(max-width:32rem){body{padding:1rem}.cards{grid-template-columns:1fr 1fr}th,td{white-space:nowrap}}
+body{max-width:90rem;margin:0 auto;padding:2rem 1rem}h1,h2{line-height:1.2}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:1rem}.card{border:1px solid var(--border);border-radius:.6rem;padding:1rem;min-width:0}.value{display:block;font-size:1.6rem;font-weight:700;overflow-wrap:anywhere}.pass{color:#15803d}.fail{color:#b91c1c}.neutral{color:inherit}.status{font-weight:700}table{border-collapse:collapse;width:100%;margin-top:1rem}th,td{border-bottom:1px solid var(--border);padding:.65rem;text-align:left;vertical-align:top}th{color:var(--accent)}.table-wrap{max-width:100%;overflow-x:auto}details{min-width:8rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:36rem}dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.4rem 1rem}dt{font-weight:700}dd{margin:0;overflow-wrap:anywhere}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}@media(max-width:32rem){body{padding:1rem}.cards{grid-template-columns:1fr 1fr}th,td{white-space:nowrap}}
 </style>
 </head>
 <body>
@@ -124,17 +171,35 @@ body{max-width:72rem;margin:0 auto;padding:2rem 1rem}h1,h2{line-height:1.2}.card
 <h2 id="summary-heading">Summary</h2>
 <div class="cards" data-testid="summary-cards">
 ${card('Release gate', summary.releaseGate.passed ? 'PASS' : 'FAIL', summary.releaseGate.passed)}
-${card('Deterministic', formatPercent(summary.deterministicPassRate), summary.deterministicPassRate >= 1)}
-${card('pass@1', formatPercent(summary.passAt1), true)}
-${card(`pass@${summary.k}`, formatPercent(summary.passAtK), true)}
-${card(`pass^${summary.k}`, formatPercent(summary.passPowerK), true)}
-${card('Judge average', summary.judgeAverage === null ? 'not run' : formatPercent(summary.judgeAverage), true)}
+${card('Deterministic', formatPercent(summary.deterministicPassRate), checkPassed(summary, 'deterministic pass rate'))}
+${card('pass@1', formatPercent(summary.passAt1), checkPassed(summary, 'pass@1'))}
+${card(`pass@${summary.k}`, formatPercent(summary.passAtK), null)}
+${card(`pass^${summary.k}`, formatPercent(summary.passPowerK), checkPassed(summary, 'pass^k'))}
+${card('Independent evidence', formatPercent(summary.independentEvidenceRate), checkPassed(summary, 'independent evidence'))}
+${card('Judge average', summary.judgeAverage === null ? 'not run' : formatPercent(summary.judgeAverage), checkPassed(summary, 'judge average'))}
 </div>
+</section>
+<section aria-labelledby="gate-heading">
+<h2 id="gate-heading">Release gate checks</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Check</th><th scope="col">Actual</th><th scope="col">Required</th><th scope="col">Result</th></tr></thead>
+<tbody>${checks}</tbody>
+</table></div>
+</section>
+<section aria-labelledby="provenance-heading">
+<h2 id="provenance-heading">Provenance</h2>
+<dl>
+<dt>System</dt><dd>${escapeHtml(summary.provenance.systemUnderTest)}</dd>
+<dt>Observer</dt><dd>${escapeHtml(summary.provenance.evidenceObserver)}</dd>
+<dt>Judge</dt><dd>${escapeHtml(summary.provenance.judge ?? 'not run')}</dd>
+<dt>Task SHA-256</dt><dd><code>${escapeHtml(summary.provenance.taskSetSha256)}</code></dd>
+<dt>Revision</dt><dd><code>${escapeHtml(summary.provenance.sourceRevision ?? 'unavailable')}</code></dd>
+</dl>
 </section>
 <section aria-labelledby="trials-heading">
 <h2 id="trials-heading">Trials</h2>
 <div class="table-wrap"><table>
-<thead><tr><th scope="col">Task</th><th scope="col">Trial</th><th scope="col">Result</th><th scope="col">Score</th><th scope="col">Failed graders</th></tr></thead>
+<thead><tr><th scope="col">Task</th><th scope="col">Severity</th><th scope="col">Trial</th><th scope="col">Result</th><th scope="col">Grader checks</th><th scope="col">Evidence</th><th scope="col">Details</th></tr></thead>
 <tbody>${rows}</tbody>
 </table></div>
 </section>
@@ -144,17 +209,36 @@ ${card('Judge average', summary.judgeAverage === null ? 'not run' : formatPercen
 `;
 }
 
-function card(label: string, value: string, passed: boolean): string {
-  return `<div class="card"><span>${escapeHtml(label)}</span><strong class="value ${passed ? 'pass' : 'fail'}">${escapeHtml(value)}</strong></div>`;
+function gradeStatus(grades: Grade[]): string {
+  const passed = grades.filter((grade) => grade.passed).length;
+  return `${passed}/${grades.length} passed`;
+}
+
+function recordDetails(record: TrialRecord): string {
+  const details = redactUnknown({
+    output: record.run.output,
+    grades: record.grades.map((grade) => ({
+      grader: grade.grader,
+      score: grade.score,
+      passed: grade.passed,
+      rationale: grade.rationale,
+    })),
+  });
+  return `<details><summary>inspect</summary><pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre></details>`;
+}
+
+function checkPassed(summary: EvalSummary, name: string): boolean | null {
+  const check = summary.releaseGate.checks.find((item) => item.name === name);
+  return check?.passed ?? null;
+}
+
+function card(label: string, value: string, passed: boolean | null): string {
+  const status = passed === null ? 'neutral' : passed ? 'pass' : 'fail';
+  return `<div class="card"><span>${escapeHtml(label)}</span><strong class="value ${status}">${escapeHtml(value)}</strong></div>`;
 }
 
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function average(values: number[]): number {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 export function escapeHtml(value: string): string {
