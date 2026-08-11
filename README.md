@@ -1,8 +1,8 @@
 # Eval Pyramid Starter
 
-A provider-neutral TypeScript starter for testing LLM applications and agents with deterministic graders, repeated trials, calibrated model judges, and a human review queue.
+An executable reference for testing LLM applications and agents with the same progression used in mature software testing: many fast component checks, fewer boundary scenarios, and a small number of black-box system tests.
 
-The default refund workflow is synthetic and runs offline. You can inspect every layer without an API key, then replace the adapter with your system under test.
+The repository follows one realistic refund workflow through every layer. It runs offline with synthetic data, real orchestration, observable tool calls, release metrics, an optional calibrated model judge, and a human review queue.
 
 ## Quick start
 
@@ -12,13 +12,11 @@ Requirements: Node.js 22.13 or a current release from Node.js 24 onward, plus np
 git clone https://github.com/bharadwaj-pendyala/eval-pyramid-starter.git
 cd eval-pyramid-starter
 npm ci
-npm run eval:deterministic
-npm run eval:repeat -- --trials 10 --k 3
-npm run eval:judge
-npm run eval:review
+npx playwright install chromium
+npm run test:pyramid
 ```
 
-Open `reports/latest/index.html` directly, or serve it locally:
+That command runs the complete evidence ladder. To inspect the generated system report:
 
 ```bash
 npm run report:serve
@@ -26,11 +24,24 @@ npm run report:serve
 
 The generated report includes aggregate reliability, per-trial results, failures, and a JSONL queue for human review. Generated reports are ignored by Git because they can contain application data.
 
+## The executable pyramid
+
+| Scope             | Framework             | What is real                                                                      | What is replaced                 | Example                                                                                            |
+| ----------------- | --------------------- | --------------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Component         | Vitest                | Refund policy and deterministic grader code                                       | Network, model, and tools        | [`tests/unit/refund-domain.test.ts`](tests/unit/refund-domain.test.ts)                             |
+| Scenario boundary | Vitest + MSW          | Agent orchestration, HTTP client, task contract, graders, and reports             | Remote tool services             | [`tests/integration/refund-tool-contract.test.ts`](tests/integration/refund-tool-contract.test.ts) |
+| Black-box system  | Eval CLI + Playwright | Fixtures through agent, tools, grades, release gate, report files, and browser UI | Production data and side effects | [`tests/e2e/report.spec.ts`](tests/e2e/report.spec.ts)                                             |
+
+Test scope and verdict method are separate axes. Vitest, MSW, and Playwright determine how much of the system executes. Deterministic assertions, model judges, and human review determine how evidence receives a verdict. A model judge is not automatically an end-to-end test.
+
+The refund slice covers three consequential paths: a duplicate charge that must be refunded and confirmed, an old order that must not trigger a financial action, and a request missing its order identifier. See [The executable eval pyramid](docs/EVAL-PYRAMID.md) for the layer boundaries, Java equivalents, and guidance for adapting the pattern.
+
 ## What is included
 
 ```text
 evals/                  Versioned task fixtures and judge golden set
-src/adapters/           Offline system and judge adapters, plus an OpenAI judge adapter
+src/adapters/           Offline and OpenAI judge adapters
+src/examples/           Runnable refund agent, domain policy, and tool gateways
 src/graders/            Deterministic and rubric graders
 src/harness/            Isolated trial runner, reliability metrics, and reports
 src/reporting/          Redaction and human review utilities
@@ -55,8 +66,12 @@ npm run eval:repeat -- --trials 20 --k 3  # Repeated offline trials
 npm run eval:judge                         # Calibrate the offline judge
 npm run eval:ci                            # Release-gated eval used in automation
 npm run eval:review                        # Count queued human reviews
-npm run test                               # Unit and integration tests
-npm run test:e2e                           # Generate and test the HTML report
+npm run test:unit                          # Fast Vitest component checks
+npm run test:integration                   # Vitest + MSW boundary scenarios
+npm run test:system                        # Generate and inspect the report with Playwright
+npm run test:pyramid                       # Run all three layers in order
+npm run test                               # All Vitest component and integration checks
+npm run test:e2e                           # Alias for test:system
 npm run verify                             # Format, types, lint, coverage, and build
 ```
 
@@ -72,14 +87,14 @@ npm run verify                             # Format, types, lint, coverage, and 
 
 The included OpenAI judge is optional. Set `OPENAI_API_KEY`, optionally set `OPENAI_JUDGE_MODEL`, and run `tsx src/cli.ts calibrate --judge openai`. The system-under-test interface itself has no provider dependency.
 
-See [Adapting the starter](docs/ADAPTING.md) for the contract and [Design and limits](docs/DESIGN.md) for the decisions this template makes deliberately.
+See [Adapting the starter](docs/ADAPTING.md) for the contract, [The executable eval pyramid](docs/EVAL-PYRAMID.md) for test placement, [Demo walkthrough](docs/DEMO.md) for a recording script, and [Design and limits](docs/DESIGN.md) for deliberate tradeoffs.
 
 ## Safety boundaries
 
 - Keep production conversations, credentials, and personal data out of fixtures.
 - Treat model output as untrusted. The HTML report escapes dynamic values and the report writer redacts common secret fields, email addresses, bearer tokens, and OpenAI-style API keys.
 - Replace the example redactor with controls appropriate to your data classification. Pattern matching cannot guarantee that arbitrary private data is removed.
-- Keep side-effecting tools sandboxed in eval environments. The fake adapter never touches an external system.
+- Keep side-effecting tools sandboxed in eval environments. The default in-memory gateway never touches an external system, and the integration test intercepts all tool HTTP traffic with MSW.
 - Model judges can be biased, inconsistent, or prompt-injected. Calibrate them against human labels and retain a human queue.
 
 Read [`SECURITY.md`](SECURITY.md) and [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before connecting real tools or model providers.
@@ -96,6 +111,6 @@ Each article links back here so the explanation and executable reference stay co
 
 ## Contributing and license
 
-Run `npm run verify` and `npm run test:e2e` before opening a pull request. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for fixture and review requirements.
+Run `npm run verify` and `npm run test:system` before opening a pull request. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for fixture and review requirements.
 
 Licensed under the [MIT License](LICENSE).

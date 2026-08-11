@@ -4,6 +4,8 @@
 
 The starter uses one typed task contract across every layer. Deterministic graders run before optional model-judged rubrics, but both retain their evidence in the same trial record. Repeated trials are isolated by a fresh adapter and temporary workspace.
 
+Execution scope and verdict method are deliberately independent. Vitest component tests, MSW-backed scenario tests, and Playwright system tests define how much code and infrastructure execute. Deterministic graders, calibrated model judges, and human review define how the resulting evidence is assessed. See [The executable eval pyramid](EVAL-PYRAMID.md).
+
 Reports are local artifacts in JSON, JSONL, Markdown, and self-contained HTML. This keeps the reference implementation inspectable and avoids coupling the harness to an eval vendor.
 
 The optional OpenAI judge uses a strict structured response. It is an example adapter, not a recommendation that one provider or model is correct for every rubric.

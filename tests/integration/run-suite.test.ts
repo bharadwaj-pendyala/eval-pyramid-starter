@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { FakeRefundAgentFactory } from '../../src/adapters/fake-refund-agent.js';
+import { RefundAgentFactory } from '../../src/examples/refund-agent/refund-agent.js';
 import { runSuite } from '../../src/harness/run-suite.js';
 import { loadTasks } from '../../src/loaders/tasks.js';
 
@@ -17,7 +17,7 @@ describe('eval harness', () => {
     try {
       const result = await runSuite({
         tasks: await loadTasks('evals/tasks.jsonl'),
-        factory: new FakeRefundAgentFactory({ failureEvery: 2 }),
+        factory: new RefundAgentFactory({ failureEvery: 2 }),
         trials: 2,
         k: 2,
         concurrency: 2,

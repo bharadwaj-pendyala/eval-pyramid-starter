@@ -1,7 +1,7 @@
 import config from '../eval.config.js';
 import { FakeJudgeProvider } from './adapters/fake-judge.js';
-import { FakeRefundAgentFactory } from './adapters/fake-refund-agent.js';
 import { OpenAIJudgeProvider } from './adapters/openai-judge.js';
+import { RefundAgentFactory } from './examples/refund-agent/refund-agent.js';
 import { calibrateJudge } from './harness/calibrate-judge.js';
 import { runSuite } from './harness/run-suite.js';
 import { loadTasks } from './loaders/tasks.js';
@@ -38,7 +38,7 @@ async function runCommand(args: string[]): Promise<void> {
 
   const runOptions = {
     tasks,
-    factory: new FakeRefundAgentFactory({ failureEvery }),
+    factory: new RefundAgentFactory({ failureEvery }),
     trials,
     k,
     concurrency: config.concurrency,
