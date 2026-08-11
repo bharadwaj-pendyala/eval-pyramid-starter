@@ -87,7 +87,7 @@ npm run verify                             # Format, types, lint, coverage, and 
 
 The included OpenAI judge is optional. Set `OPENAI_API_KEY`, optionally set `OPENAI_JUDGE_MODEL`, and run `tsx src/cli.ts calibrate --judge openai`. The system-under-test interface itself has no provider dependency.
 
-See [Adapting the starter](docs/ADAPTING.md) for the contract, [The executable eval pyramid](docs/EVAL-PYRAMID.md) for test placement, [Demo walkthrough](docs/DEMO.md) for a recording script, and [Design and limits](docs/DESIGN.md) for deliberate tradeoffs.
+See [Adapting the starter](docs/ADAPTING.md) for the contract, [The executable eval pyramid](docs/EVAL-PYRAMID.md) for test placement, and [Design and limits](docs/DESIGN.md) for deliberate tradeoffs.
 
 ## Safety boundaries
 
