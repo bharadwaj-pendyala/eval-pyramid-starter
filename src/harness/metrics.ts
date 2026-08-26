@@ -51,10 +51,15 @@ export function computeReliabilitySummary(
   const invalidTrialCount = records.length - scored.length;
   const invalidRate = invalidTrialCount / records.length;
 
+  // The deterministic layer can succeed on a trial the judge later lost, so
+  // its rate covers every trial where it actually ran.
+  const deterministicMeasured = records.filter(
+    (record) => record.deterministicPassed !== null
+  );
   const deterministicPassRate =
-    scored.length > 0
-      ? scored.filter((record) => record.deterministicPassed).length /
-        scored.length
+    deterministicMeasured.length > 0
+      ? deterministicMeasured.filter((record) => record.deterministicPassed)
+          .length / deterministicMeasured.length
       : null;
   const judgeGrades = scored.flatMap((record) =>
     record.grades.filter((grade) => grade.grader.startsWith('judge:'))
@@ -82,6 +87,15 @@ export function computeReliabilitySummary(
     passAt1: passAt1Average,
     passAtK: passAtKAverage,
     passPowerK: passPowerKAverage,
+    totalCostUsd: scored.reduce(
+      (total, record) => total + record.run.metrics.costUsd,
+      0
+    ),
+    medianTrialDurationMs: median(
+      scored
+        .filter((record) => record.durationMs !== null)
+        .map((record) => record.durationMs ?? 0)
+    ),
     tasks,
     releaseGate: buildReleaseGate(
       {
@@ -116,6 +130,16 @@ function taskReliability(
     trials,
     scoredTrials,
     invalidTrials: trials - scoredTrials,
+    // Spend and duration describe the trials that ran; a trial that measured
+    // nothing must not pull either figure toward zero.
+    meanCostUsd: averageOf(
+      scoredRecords.map((record) => record.run.metrics.costUsd)
+    ),
+    medianDurationMs: median(
+      scoredRecords
+        .filter((record) => record.durationMs !== null)
+        .map((record) => record.durationMs ?? 0)
+    ),
     passAt1: scoredTrials > 0 ? successes / scoredTrials : null,
     // A sample smaller than k cannot answer a k-attempt question. Reporting
     // nothing is honest; reporting zero would read as a failure.
@@ -232,4 +256,13 @@ function average(values: number[]): number {
 function averageOf(values: Array<number | null>): number | null {
   const measured = values.filter((value): value is number => value !== null);
   return measured.length > 0 ? average(measured) : null;
+}
+
+/** Duration is skewed by a few slow trials, so the middle beats the mean. */
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle] ?? null;
+  return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 }

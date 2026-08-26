@@ -13,7 +13,16 @@ import type {
 const schemaCompiler = new Ajv2020({ allErrors: true, strict: true });
 const schemaValidators = new WeakMap<object, ValidateFunction>();
 
-export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
+/** What the harness itself measured, which beats anything the system reports about itself. */
+export interface ObservedTrial {
+  durationMs?: number;
+}
+
+export function gradeDeterministically(
+  task: EvalTask,
+  run: AgentRun,
+  observed: ObservedTrial = {}
+): Grade[] {
   const grades: Grade[] = [];
 
   if (task.expected.outputSchema) {
@@ -59,12 +68,16 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
     );
   }
   if (task.expected.maxLatencyMs !== undefined) {
+    // Prefer the harness's own clock; fall back to the self-report only when
+    // the caller measured nothing.
+    const measured = observed.durationMs !== undefined;
     grades.push(
       limitGrade(
         'latency-budget',
-        run.metrics.latencyMs,
+        measured ? (observed.durationMs ?? 0) : run.metrics.latencyMs,
         task.expected.maxLatencyMs,
-        'ms'
+        'ms',
+        measured ? 'measured by the harness' : 'reported by the system'
       )
     );
   }
@@ -135,14 +148,15 @@ function limitGrade(
   grader: string,
   actual: number,
   limit: number,
-  unit: string
+  unit: string,
+  source = 'reported by the system'
 ): Grade {
   const passed = actual <= limit;
   return {
     grader,
     score: passed ? 1 : 0,
     passed,
-    rationale: `${actual} ${unit} used; limit is ${limit} ${unit}.`,
+    rationale: `${actual} ${unit} used (${source}); limit is ${limit} ${unit}.`,
   };
 }
 

@@ -31,4 +31,8 @@ This template assumes eval inputs and model outputs are untrusted. The most impo
 
 Use disposable infrastructure, least-privilege credentials, provider retention settings, application-specific redaction, network egress restrictions, per-operation timeouts, and approval gates that match your system's impact. Review failed and uncertain trials rather than relying on an aggregate score alone.
 
-Two boundaries deserve attention before this template measures anything consequential. The system under test runs in the harness process, so an adapter you did not write is inside the trust boundary: run a real agent out of process, in a sandbox, with its own network and filesystem limits. Cost, turn, and latency budgets are graded from metrics the adapter reports about itself, so meter them independently before relying on a budget grade to stop a runaway run.
+Two boundaries deserve attention before this template measures anything consequential. The system under test runs in the harness process, so an adapter you did not write is inside the trust boundary: run a real agent out of process, in a sandbox, with its own network and filesystem limits.
+
+The harness measures trial duration on its own clock and grades the latency budget against it, but cost and turn budgets are graded from numbers the adapter reports about itself. An adapter that under-reports either can exceed its budget without the grade noticing, so meter spend at the provider or gateway before relying on a budget grade to stop a runaway run.
+
+Retries apply only to trials that ended in an infrastructure outcome, never to one that produced a result, so they cannot be used to retry a failing trial into a passing one. A rising retry or invalid count is still worth alerting on: it means the measurement is degrading even when the score looks steady.

@@ -135,10 +135,15 @@ export interface TrialRecord {
   run: AgentRun;
   grades: Grade[];
   outcome: TrialOutcome;
+  /** How many times this trial ran, including retries after an infrastructure failure. */
+  attempts: number;
+  /** Wall-clock time the harness measured around the system, not a self-report. */
+  durationMs: number | null;
   /** Problems that happened outside the measurement, such as failed cleanup. */
   warnings: string[];
   error: string | null;
-  deterministicPassed: boolean;
+  /** Null when the deterministic layer never ran, so it measured nothing. */
+  deterministicPassed: boolean | null;
   judgePassed: boolean | null;
   passed: boolean;
 }
@@ -152,6 +157,10 @@ export interface TaskReliability {
   passAt1: number | null;
   passAtK: number | null;
   passPowerK: number | null;
+  /** Mean spend per scored trial, over the trials that reported one. */
+  meanCostUsd: number | null;
+  /** Median wall-clock duration of a scored trial. Duration is skewed; the mean misleads. */
+  medianDurationMs: number | null;
 }
 
 export interface ReleaseThresholds {
@@ -212,6 +221,9 @@ export interface EvalSummary {
   passAt1: number | null;
   passAtK: number | null;
   passPowerK: number | null;
+  /** What the scored trials cost in total. Zero when nothing reported a cost. */
+  totalCostUsd: number;
+  medianTrialDurationMs: number | null;
   tasks: TaskReliability[];
   releaseGate: ReleaseGate;
   provenance: Provenance | null;
@@ -220,7 +232,11 @@ export interface EvalSummary {
 export interface EvalConfig {
   taskFile: string;
   reportDirectory: string;
+  /** Where `selftest` writes the oracle and nop reports, so a failure is inspectable. */
+  controlReportDirectory: string;
   concurrency: number;
+  /** Extra attempts for a trial lost to an infrastructure failure. Never used on a real result. */
+  retries: number;
   thresholds: ReleaseThresholds;
 }
 
@@ -251,4 +267,6 @@ export interface ControlCheck {
 export interface ControlSummary {
   checks: ControlCheck[];
   passed: boolean;
+  /** Where the oracle and nop reports were written, for inspecting a failure. */
+  reportDirectory: string;
 }

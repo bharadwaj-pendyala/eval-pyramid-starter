@@ -72,13 +72,23 @@ A grader that accepts anything reports a perfect model. Two controls bracket eve
 - The **oracle** replays the known-good `reference` answer the task ships with. Every grader must accept it. A task the oracle cannot pass is broken, not hard.
 - The **nop** control returns nothing at all. At least one grader must reject it. A task it passes cannot tell work apart from no work.
 
-Both controls are also available to the runner as `--system oracle` and `--system nop`, so you can produce a full report for either.
+Both run through the same path as a real eval, so they exercise the same workspaces, graders, and outcome rules. Each writes a full report under `reports/controls/`, so a control failure is something you can open and read. They are also available to the runner as `--system oracle` and `--system nop`.
+
+The controls cannot check a budget. Both finish instantly and spend nothing, so a `maxCostUsd` or `maxLatencyMs` set far too high passes here and still passes in production. Set budgets from a measured baseline instead.
 
 ## Scored and invalid trials
 
 Only a trial that reached a verdict says anything about the system under test. When the adapter throws, a grader crashes, or the judge is unreachable, the trial is recorded as **invalid** with a status naming the failure, and it is excluded from `pass@1`, `pass@k`, `pass^k`, the deterministic pass rate, and the judge average. Cleanup problems that happen after the measurement are recorded as warnings and change no result.
 
 Dropping those trials silently would be its own way to mislead, so the release gate also fails when the share of invalid trials exceeds `maxInvalidRate`, and every report states how many trials were scored against how many ran.
+
+Set `retries` in [`eval.config.ts`](eval.config.ts) (or `--retries N`) to give a lost trial another attempt. Only infrastructure outcomes are retried; a trial that produced a real result is never rerun, because retrying failures until one passes is sampling to a conclusion. Each record keeps its `attempts` count and a warning naming what was retried.
+
+A judge outage is a partial loss, not a total one: the trial reaches no verdict and leaves `pass@k`, but its deterministic result still counts toward the deterministic pass rate, because that layer did run.
+
+## What a run cost
+
+Reports carry the total spend of the scored trials, plus mean cost and median duration per task, so an expensive or slow task is visible on its own. Duration is measured by the harness with its own clock rather than taken from the adapter's self-report, and the `maxLatencyMs` budget is graded against that measurement. Cost, token counts, and turn counts are still whatever the adapter reports about itself; meter them independently before you rely on them to stop a runaway run.
 
 ## Comparing two runs
 

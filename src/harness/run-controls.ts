@@ -1,91 +1,134 @@
+import { join } from 'node:path';
+
 import { NopAgentFactory } from '../adapters/nop-agent.js';
 import { OracleAgentFactory } from '../adapters/oracle-agent.js';
-import { gradeDeterministically } from '../graders/deterministic.js';
-import { gradeWithJudge } from '../graders/model-judge.js';
 import type {
-  AgentRun,
   ControlCheck,
   ControlSummary,
   EvalTask,
-  Grade,
   JudgeProvider,
+  ReleaseThresholds,
+  TrialRecord,
 } from '../types.js';
+import { runSuite } from './run-suite.js';
 
 const ORACLE_EXPECTATION = 'the reference answer passes every grader';
 const NOP_EXPECTATION = 'the do-nothing baseline fails at least one grader';
 
 /**
- * Checks the graders before the graders check a model. Two controls bracket
- * every task: a correct answer must pass it, and an empty one must not.
+ * The controls assert on their own records, so the gate is not the point. It
+ * still fails when a control run could not measure, which is worth seeing.
+ */
+const CONTROL_THRESHOLDS: ReleaseThresholds = {
+  deterministicPassRate: 0,
+  passAt1: 0,
+  passPowerK: 0,
+  judgeAverage: 0,
+  maxInvalidRate: 0,
+};
+
+export interface ControlOptions {
+  /** Where the two control reports are written, one directory each. */
+  reportDirectory: string;
+  judgeProvider?: JudgeProvider | undefined;
+  concurrency?: number;
+}
+
+/**
+ * Checks the graders before the graders check a model. Both controls run
+ * through the same path as a real eval, so what they exercise is what a real
+ * run exercises - the same workspaces, graders, and outcome rules.
+ *
+ * Budget graders are the exception: both controls stay well inside any turn,
+ * cost, or latency limit, so a budget that is set too loosely passes here.
  */
 export async function runControls(
   tasks: EvalTask[],
-  judgeProvider?: JudgeProvider
+  options: ControlOptions
 ): Promise<ControlSummary> {
   if (tasks.length === 0)
     throw new Error('At least one task is required to run the controls.');
 
-  const oracle = await new OracleAgentFactory().create();
-  const nop = await new NopAgentFactory().create();
-  const checks: ControlCheck[] = [];
+  const concurrency = options.concurrency ?? 2;
+  const shared = {
+    tasks,
+    trials: 1,
+    k: 1,
+    concurrency,
+    thresholds: CONTROL_THRESHOLDS,
+    retries: 0,
+    ...(options.judgeProvider ? { judgeProvider: options.judgeProvider } : {}),
+  };
 
-  for (const task of tasks) {
-    checks.push(
-      await oracleCheck(
-        task,
-        () => oracle.run(task, controlContext(task)),
-        judgeProvider
-      )
-    );
-    checks.push(
-      await nopCheck(
-        task,
-        () => nop.run(task, controlContext(task)),
-        judgeProvider
-      )
-    );
-  }
+  const oracle = await runSuite({
+    ...shared,
+    factory: new OracleAgentFactory(),
+    reportDirectory: join(options.reportDirectory, 'oracle'),
+    systemLabel: 'oracle',
+  });
+  const nop = await runSuite({
+    ...shared,
+    factory: new NopAgentFactory(),
+    reportDirectory: join(options.reportDirectory, 'nop'),
+    systemLabel: 'nop',
+  });
 
-  return { checks, passed: checks.every((check) => check.passed) };
+  const checks = tasks.flatMap((task) => [
+    oracleCheck(task, findRecord(oracle.records, task.id)),
+    nopCheck(task, findRecord(nop.records, task.id)),
+  ]);
+
+  return {
+    checks,
+    passed: checks.every((check) => check.passed),
+    reportDirectory: options.reportDirectory,
+  };
 }
 
-async function oracleCheck(
-  task: EvalTask,
-  run: () => Promise<AgentRun>,
-  judgeProvider: JudgeProvider | undefined
-): Promise<ControlCheck> {
-  let grades: Grade[];
-  try {
-    grades = await gradeControlRun(task, await run(), judgeProvider);
-  } catch (error) {
-    return check(task, 'oracle', ORACLE_EXPECTATION, false, message(error));
+function oracleCheck(task: EvalTask, record: TrialRecord): ControlCheck {
+  if (!record.outcome.scored) {
+    return check(
+      task,
+      'oracle',
+      ORACLE_EXPECTATION,
+      false,
+      `The oracle could not run (${record.outcome.status}): ${record.outcome.detail ?? 'no detail'}`
+    );
+  }
+  if (record.grades.length === 0) {
+    return check(
+      task,
+      'oracle',
+      ORACLE_EXPECTATION,
+      false,
+      'The task declares no expectations, so there is nothing to prove.'
+    );
   }
 
-  const failed = grades.filter((grade) => !grade.passed);
+  const failed = record.grades.filter((grade) => !grade.passed);
   return check(
     task,
     'oracle',
     ORACLE_EXPECTATION,
     failed.length === 0,
     failed.length === 0
-      ? `${grades.length} grader(s) accepted the reference answer.`
-      : `Rejected the reference answer: ${describe(failed)}.`
+      ? `${record.grades.length} grader(s) accepted the reference answer.`
+      : `Rejected the reference answer: ${failed.map((grade) => `${grade.grader} (${grade.rationale})`).join('; ')}`
   );
 }
 
-async function nopCheck(
-  task: EvalTask,
-  run: () => Promise<AgentRun>,
-  judgeProvider: JudgeProvider | undefined
-): Promise<ControlCheck> {
-  let grades: Grade[];
-  try {
-    grades = await gradeControlRun(task, await run(), judgeProvider);
-  } catch (error) {
-    return check(task, 'nop', NOP_EXPECTATION, false, message(error));
+function nopCheck(task: EvalTask, record: TrialRecord): ControlCheck {
+  if (!record.outcome.scored) {
+    return check(
+      task,
+      'nop',
+      NOP_EXPECTATION,
+      false,
+      `The nop control could not run (${record.outcome.status}): ${record.outcome.detail ?? 'no detail'}`
+    );
   }
 
-  const failed = grades.filter((grade) => !grade.passed);
+  const failed = record.grades.filter((grade) => !grade.passed);
   return check(
     task,
     'nop',
@@ -97,25 +140,11 @@ async function nopCheck(
   );
 }
 
-async function gradeControlRun(
-  task: EvalTask,
-  run: AgentRun,
-  judgeProvider: JudgeProvider | undefined
-): Promise<Grade[]> {
-  const grades = gradeDeterministically(task, run);
-  if (grades.length === 0)
-    throw new Error('The task declares no deterministic expectations.');
-  if (!judgeProvider) return grades;
-  return [...grades, ...(await gradeWithJudge(task, run, judgeProvider))];
-}
-
-function controlContext(task: EvalTask): {
-  runId: string;
-  trialIndex: number;
-  workspace: string;
-} {
-  // Controls never touch a workspace: they exercise the graders, not a system.
-  return { runId: `control-${task.id}`, trialIndex: 0, workspace: '' };
+function findRecord(records: TrialRecord[], taskId: string): TrialRecord {
+  const record = records.find((item) => item.taskId === taskId);
+  if (!record)
+    throw new Error(`The control run produced no record for task ${taskId}.`);
+  return record;
 }
 
 function check(
@@ -126,14 +155,4 @@ function check(
   detail: string
 ): ControlCheck {
   return { taskId: task.id, control, expectation, passed, detail };
-}
-
-function describe(grades: Grade[]): string {
-  return grades
-    .map((grade) => `${grade.grader} (${grade.rationale})`)
-    .join('; ');
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown control failure';
 }

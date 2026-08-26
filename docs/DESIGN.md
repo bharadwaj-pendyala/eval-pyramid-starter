@@ -16,9 +16,19 @@ Excluding those trials creates the opposite risk: a run that measured almost not
 
 Cleanup runs after the measurement is complete, so a failure there is recorded as a warning on the trial and changes no result.
 
+Losing a trial is not always final. A trial that ended in an infrastructure outcome can be retried, because nothing about the system was learned the first time. A trial that produced a real result is never retried at any setting: rerunning failures until one passes is sampling to a conclusion, and it would quietly inflate every rate above it.
+
+The loss is also not always total. When the judge fails, the deterministic layer has already run, so its result still counts toward the deterministic pass rate while the trial as a whole leaves `pass@k`. Each layer reports what it actually measured.
+
 ## Why the graders are tested before the model
 
 Every task ships a `reference` answer, and two controls run against it: the oracle replays the reference and must pass every grader, while the nop control returns nothing and must be rejected by at least one. Between them they catch the two failure modes a passing score cannot distinguish from correctness — expectations that reject a correct answer, and expectations so loose that an empty answer satisfies them.
+
+## What the harness measures itself
+
+Trial duration is taken from the harness's own clock around the call into the system, and `maxLatencyMs` is graded against that. A system that under-reports its latency cannot pass a latency budget it missed.
+
+Cost, tokens, and turns have no such independent source: the harness cannot see inside the adapter, so those remain self-reported and are labelled that way in the grade rationale. Reports quote total spend for the run and mean cost with median duration per task, since duration is skewed enough that a mean would mislead.
 
 ## Why reports carry provenance
 
@@ -32,8 +42,9 @@ Scores are compared across weeks. Each summary records digests of the task set a
 - Redaction is defense in depth, not a data-loss-prevention system. Use synthetic inputs and apply organization-specific controls before retaining reports.
 - The fake judge demonstrates calibration mechanics with explicit text signals. It is not a semantic quality judge.
 - Aggregate pass rates can hide high-severity failures. Add task-level and severity-specific gates for consequential applications.
-- Budget grades are computed from metrics the system under test reports about itself. Meter cost, turns, and latency outside the adapter before treating a budget grade as a control.
-- The controls prove that a task's graders can separate a correct answer from an empty one. They cannot prove that the reference answer is the behavior you actually want.
+- Latency is measured by the harness, but cost and turn budgets are graded from numbers the system reports about itself. Meter them outside the adapter before treating either as a control.
+- The controls prove that a task's graders can separate a correct answer from an empty one. They cannot prove the reference answer is the behavior you want, and they cannot check a budget: both controls finish instantly and spend nothing, so a limit set far too high passes them.
+- Retries hide transient infrastructure failures from the reliability numbers, which is the point, but a rising retry or invalid count is an operational signal worth watching rather than absorbing.
 
 ## Why there is no hidden trace grader
 

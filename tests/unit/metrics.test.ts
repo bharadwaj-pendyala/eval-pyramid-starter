@@ -90,6 +90,43 @@ describe('reliability estimators', () => {
     expect(summary.judgeAverage).toBe(1);
   });
 
+  it('still counts the deterministic layer when only the judge was lost', () => {
+    const records = [
+      record('a-task', true, 1),
+      record('a-task', false, 0, invalid('judge_error', 'judge unavailable')),
+    ];
+    const summary = computeReliabilitySummary(
+      records,
+      1,
+      'judge-outage',
+      thresholds
+    );
+
+    // The judge measured nothing, but the deterministic graders both ran.
+    expect(summary.judgeAverage).toBe(1);
+    expect(summary.deterministicPassRate).toBe(0.5);
+    expect(summary.scoredTrialCount).toBe(1);
+  });
+
+  it('reports spend and duration over the trials that ran', () => {
+    const records = [
+      record('a-task', true, 1),
+      record('a-task', false, 0, invalid('system_error', 'provider down')),
+    ];
+    const summary = computeReliabilitySummary(
+      records,
+      1,
+      'cost-test',
+      thresholds
+    );
+
+    // The invalid trial reports a zeroed run; including it would understate both.
+    expect(summary.totalCostUsd).toBeCloseTo(0.02, 10);
+    expect(summary.medianTrialDurationMs).toBe(120);
+    expect(summary.tasks[0]?.meanCostUsd).toBeCloseTo(0.02, 10);
+    expect(summary.tasks[0]?.medianDurationMs).toBe(120);
+  });
+
   it('fails the gate when too many trials measured nothing', () => {
     const records = [
       record('a-task', true, 1),
@@ -164,7 +201,7 @@ function record(
         latencyMs: 1,
         inputTokens: 1,
         outputTokens: 1,
-        costUsd: 0,
+        costUsd: outcome.scored ? 0.02 : 0,
         turns: 1,
       },
     },
@@ -177,9 +214,14 @@ function record(
       },
     ],
     outcome,
+    attempts: 1,
+    durationMs: outcome.scored ? 120 : null,
     warnings: [],
     error: outcome.detail,
-    deterministicPassed: passed,
+    // A judge outage still leaves a deterministic result behind; the other
+    // invalid statuses mean the deterministic layer never ran.
+    deterministicPassed:
+      outcome.scored || outcome.status === 'judge_error' ? passed : null,
     judgePassed: passed,
     passed,
   };

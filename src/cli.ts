@@ -47,6 +47,7 @@ async function runCommand(args: string[]): Promise<void> {
   const judgeMode = stringFlag(args, '--judge', 'none');
   const judgeProvider = createJudge(judgeMode);
   const systemLabel = stringFlag(args, '--system', 'fake');
+  const retries = nonNegativeIntegerFlag(args, '--retries', config.retries);
   const tasks = await loadTasks(config.taskFile);
 
   const runOptions = {
@@ -55,6 +56,7 @@ async function runCommand(args: string[]): Promise<void> {
     trials,
     k,
     concurrency: config.concurrency,
+    retries,
     thresholds: config.thresholds,
     reportDirectory: config.reportDirectory,
     systemLabel,
@@ -82,7 +84,11 @@ async function calibrateCommand(args: string[]): Promise<void> {
 async function selftestCommand(args: string[]): Promise<void> {
   const judgeProvider = createJudge(stringFlag(args, '--judge', 'none'));
   const tasks = await loadTasks(config.taskFile);
-  const summary = await runControls(tasks, judgeProvider);
+  const summary = await runControls(tasks, {
+    reportDirectory: config.controlReportDirectory,
+    concurrency: config.concurrency,
+    judgeProvider,
+  });
   printControls(summary);
   if (!summary.passed) process.exitCode = 1;
 }
@@ -158,6 +164,9 @@ function printSummary(summary: EvalSummary): void {
     console.log(`pass@${summary.k}: ${percent(summary.passAtK)}`);
   console.log(`pass^${summary.k}: ${percent(summary.passPowerK)}`);
   console.log(`Judge: ${percent(summary.judgeAverage)}`);
+  console.log(
+    `Cost: $${summary.totalCostUsd.toFixed(4)}, median trial: ${duration(summary.medianTrialDurationMs)}`
+  );
   console.log(`Release gate: ${summary.releaseGate.passed ? 'PASS' : 'FAIL'}`);
   for (const check of summary.releaseGate.checks.filter(
     (item) => !item.passed
@@ -179,11 +188,18 @@ function printControls(summary: ControlSummary): void {
       ? `All ${summary.checks.length} control checks passed.`
       : `${summary.checks.filter((check) => !check.passed).length} of ${summary.checks.length} control checks failed. Fix the tasks before trusting a run.`
   );
+  console.log(`Control reports: ${summary.reportDirectory}`);
 }
 
 function percent(value: number | null): string {
   if (value === null) return 'not measured';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function duration(milliseconds: number | null): string {
+  if (milliseconds === null) return 'not measured';
+  if (milliseconds >= 1000) return `${(milliseconds / 1000).toFixed(1)} s`;
+  return `${Number(milliseconds.toFixed(1))} ms`;
 }
 
 function printHelp(): void {
@@ -196,8 +212,8 @@ function printHelp(): void {
 
 Direct CLI:
   tsx src/cli.ts run [--trials N] [--k N] [--judge none|fake|openai]
-                       [--system fake|oracle|nop] [--failure-every N]
-                       [--fail-on-gate]
+                       [--system fake|oracle|nop] [--retries N]
+                       [--failure-every N] [--fail-on-gate]
   tsx src/cli.ts selftest [--judge none|fake|openai]
   tsx src/cli.ts calibrate [--judge fake|openai]
   tsx src/cli.ts review`);

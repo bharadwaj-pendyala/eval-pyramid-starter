@@ -37,6 +37,10 @@ class ProductAdapter implements SystemUnderTest {
 
 Return the final output, observable outcome, transcript, tool calls, latency, token counts, cost, and conversational turn count. Do not award credit for hidden chain-of-thought. Grade only evidence that your application can safely retain and review.
 
+The harness times the call into `run` itself and grades `maxLatencyMs` against that measurement, so your `latencyMs` is recorded but not trusted. Cost, tokens, and turns come only from you: report them from the provider's usage response rather than estimating, since budgets and the spend column are computed from them.
+
+Throw from `run` when the trial could not happen at all — an authentication failure, an exhausted quota, a provider outage. The harness records that as `system_error`, keeps it out of every rate, and retries it if `retries` allows. Returning a degraded answer instead turns an infrastructure problem into a recorded model failure.
+
 ## Write tasks before rubrics
 
 Start with cases that have machine-checkable answers:
@@ -68,7 +72,11 @@ Give each task a `reference` block holding the output a correct system would pro
 
 ## Expect trials that measure nothing
 
-When your adapter throws, a grader crashes, or the judge is unreachable, the harness records the trial as invalid and keeps it out of every rate. Give the adapter its own timeouts and retries so a transient provider error does not become an invalid trial, and watch the invalid rate in the report: a run with many of them is not a run with a low score, it is a run that did not measure.
+When your adapter throws, a grader crashes, or the judge is unreachable, the harness records the trial as invalid and keeps it out of every rate.
+
+Against a live provider, set `retries` to 1 or 2 in `eval.config.ts`. That absorbs the ordinary 429 and 503 without touching a real result — only infrastructure outcomes are retried. Give the adapter its own request timeout as well, since the harness does not terminate a run that hangs.
+
+Then watch the invalid rate. A run with many invalid trials is not a run with a low score, it is a run that did not measure, and `maxInvalidRate` is what stops it from shipping as if it had.
 
 ## Preserve trial isolation
 

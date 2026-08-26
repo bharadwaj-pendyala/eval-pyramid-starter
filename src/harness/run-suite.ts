@@ -13,7 +13,6 @@ import type {
   ReleaseThresholds,
   SystemUnderTest,
   SystemUnderTestFactory,
-  TrialOutcome,
   TrialRecord,
   TrialStatus,
 } from '../types.js';
@@ -21,6 +20,17 @@ import { computeReliabilitySummary } from './metrics.js';
 import { completed, invalid } from './outcomes.js';
 import { computeProvenance } from './provenance.js';
 import { writeReports } from './write-reports.js';
+
+/**
+ * Failures worth another attempt: they come from the infrastructure, not from
+ * the task. A grader bug is deterministic, so retrying it only wastes budget,
+ * and a real result is never retried - that would bias the sample.
+ */
+const RETRYABLE_STATUSES = new Set<TrialStatus>([
+  'harness_error',
+  'judge_error',
+  'system_error',
+]);
 
 export interface RunSuiteOptions {
   tasks: EvalTask[];
@@ -32,6 +42,8 @@ export interface RunSuiteOptions {
   reportDirectory: string;
   judgeProvider?: JudgeProvider;
   runId?: string;
+  /** Extra attempts for a trial lost to an infrastructure failure. Defaults to none. */
+  retries?: number;
   /** Recorded in the report so a result names the system it measured. */
   systemLabel?: string;
   taskFile?: string;
@@ -47,6 +59,7 @@ export async function runSuite(
 ): Promise<RunSuiteResult> {
   validateOptions(options);
   const runId = options.runId ?? createRunId();
+  const retries = options.retries ?? 0;
   const jobs = options.tasks.flatMap((task) =>
     Array.from({ length: options.trials }, (_, trialIndex) => ({
       task,
@@ -62,7 +75,8 @@ export async function runSuite(
         job.trialIndex,
         runId,
         options.factory,
-        options.judgeProvider
+        options.judgeProvider,
+        retries
       )
   );
   records.sort(
@@ -77,6 +91,7 @@ export async function runSuite(
     trials: options.trials,
     k: options.k,
     concurrency: options.concurrency,
+    retries,
     systemUnderTest: options.systemLabel ?? options.factory.constructor.name,
     judge: options.judgeProvider?.name,
     taskFile: options.taskFile,
@@ -94,6 +109,42 @@ export async function runSuite(
 }
 
 async function runTrial(
+  task: EvalTask,
+  trialIndex: number,
+  runId: string,
+  factory: SystemUnderTestFactory,
+  judgeProvider: JudgeProvider | undefined,
+  retries: number
+): Promise<TrialRecord> {
+  let record = await attemptTrial(
+    task,
+    trialIndex,
+    runId,
+    factory,
+    judgeProvider
+  );
+  const warnings = [...record.warnings];
+  let attempts = 1;
+
+  while (attempts <= retries && RETRYABLE_STATUSES.has(record.outcome.status)) {
+    warnings.push(
+      `Attempt ${attempts} was retried after ${record.outcome.status}: ${record.outcome.detail ?? 'no detail'}`
+    );
+    record = await attemptTrial(
+      task,
+      trialIndex,
+      runId,
+      factory,
+      judgeProvider
+    );
+    warnings.push(...record.warnings);
+    attempts += 1;
+  }
+
+  return { ...record, attempts, warnings };
+}
+
+async function attemptTrial(
   task: EvalTask,
   trialIndex: number,
   runId: string,
@@ -148,25 +199,32 @@ async function executeTrial(
   judgeProvider: JudgeProvider | undefined
 ): Promise<TrialRecord> {
   let run: AgentRun;
+  const startedAt = performance.now();
+  let durationMs: number;
   try {
     run = await system.run(task, { runId, trialIndex, workspace });
+    durationMs = elapsedSince(startedAt);
   } catch (error) {
-    return invalidTrial(
-      task,
-      trialIndex,
-      'system_error',
-      errorMessage(error, 'Unknown system-under-test error')
-    );
+    return {
+      ...invalidTrial(
+        task,
+        trialIndex,
+        'system_error',
+        errorMessage(error, 'Unknown system-under-test error')
+      ),
+      durationMs: elapsedSince(startedAt),
+    };
   }
 
   let deterministicGrades: Grade[];
   try {
-    deterministicGrades = gradeDeterministically(task, run);
+    deterministicGrades = gradeDeterministically(task, run, { durationMs });
   } catch (error) {
     const message = errorMessage(error, 'Unknown deterministic grader error');
     return {
       ...invalidTrial(task, trialIndex, 'grader_error', message),
       run,
+      durationMs,
       grades: [runtimeGrade('deterministic:runtime', message)],
     };
   }
@@ -178,7 +236,6 @@ async function executeTrial(
   if (judgeProvider) {
     try {
       const judgeGrades = await gradeWithJudge(task, run, judgeProvider);
-      const grades = [...deterministicGrades, ...judgeGrades];
       const judgePassed =
         judgeGrades.length > 0
           ? judgeGrades.every((grade) => grade.passed)
@@ -187,8 +244,10 @@ async function executeTrial(
         taskId: task.id,
         trialIndex,
         run,
-        grades,
+        grades: [...deterministicGrades, ...judgeGrades],
         outcome: completed(),
+        attempts: 1,
+        durationMs,
         warnings: [],
         error: null,
         deterministicPassed,
@@ -196,12 +255,13 @@ async function executeTrial(
         passed: deterministicPassed && judgePassed !== false,
       };
     } catch (error) {
-      // The deterministic evidence survives, but no verdict exists for this
-      // trial, so it must not count as a model failure.
+      // The deterministic layer still measured something, so its result is
+      // kept; the trial as a whole reached no verdict.
       const message = errorMessage(error, 'Unknown judge error');
       return {
         ...invalidTrial(task, trialIndex, 'judge_error', message),
         run,
+        durationMs,
         grades: [...deterministicGrades, ...judgeRuntimeGrades(task, message)],
         deterministicPassed,
       };
@@ -214,6 +274,8 @@ async function executeTrial(
     run,
     grades: deterministicGrades,
     outcome: completed(),
+    attempts: 1,
+    durationMs,
     warnings: [],
     error: null,
     deterministicPassed,
@@ -261,16 +323,17 @@ function invalidTrial(
   status: TrialStatus,
   message: string
 ): TrialRecord {
-  const outcome: TrialOutcome = invalid(status, message);
   return {
     taskId: task.id,
     trialIndex,
     run: failedRun(),
     grades: [runtimeGrade(status, message)],
-    outcome,
+    outcome: invalid(status, message),
+    attempts: 1,
+    durationMs: null,
     warnings: [],
     error: message,
-    deterministicPassed: false,
+    deterministicPassed: null,
     judgePassed: null,
     passed: false,
   };
@@ -278,6 +341,11 @@ function invalidTrial(
 
 function runtimeGrade(grader: string, message: string): Grade {
   return { grader, score: 0, passed: false, rationale: message };
+}
+
+/** Tenth-of-a-millisecond resolution, so a fast adapter does not read as zero. */
+function elapsedSince(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -314,6 +382,12 @@ function validateOptions(options: RunSuiteOptions): void {
   }
   if (!Number.isInteger(options.concurrency) || options.concurrency < 1) {
     throw new Error('concurrency must be a positive integer.');
+  }
+  if (
+    options.retries !== undefined &&
+    (!Number.isInteger(options.retries) || options.retries < 0)
+  ) {
+    throw new Error('retries must be zero or a positive integer.');
   }
 }
 

@@ -6,7 +6,6 @@ import { promisify } from 'node:util';
 import type {
   EvalTask,
   GitProvenance,
-  JsonValue,
   Provenance,
   ReleaseThresholds,
 } from '../types.js';
@@ -19,6 +18,7 @@ export interface ProvenanceInput {
   trials: number;
   k: number;
   concurrency: number;
+  retries?: number | undefined;
   systemUnderTest: string;
   judge?: string | undefined;
   taskFile?: string | undefined;
@@ -29,7 +29,7 @@ export async function computeProvenance(
 ): Promise<Provenance> {
   const taskDigests = input.tasks.map((task) => ({
     taskId: task.id,
-    digest: digest(task as unknown as JsonValue),
+    digest: digest(task),
   }));
 
   return {
@@ -45,10 +45,11 @@ export async function computeProvenance(
     ),
     taskDigests,
     configDigest: digest({
-      thresholds: input.thresholds as unknown as JsonValue,
+      thresholds: input.thresholds,
       trials: input.trials,
       k: input.k,
       concurrency: input.concurrency,
+      retries: input.retries ?? 0,
       systemUnderTest: input.systemUnderTest,
       judge: input.judge ?? null,
     }),
@@ -58,7 +59,7 @@ export async function computeProvenance(
 }
 
 /** Stable across key order, so an unchanged task never changes its digest. */
-export function digest(value: JsonValue): string {
+export function digest(value: unknown): string {
   return digestText(canonicalize(value));
 }
 
@@ -66,7 +67,7 @@ function digestText(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function canonicalize(value: JsonValue): string {
+function canonicalize(value: unknown): string {
   if (value === null || typeof value !== 'object')
     return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value))

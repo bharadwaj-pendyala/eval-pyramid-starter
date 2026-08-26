@@ -281,6 +281,143 @@ describe('run suite boundaries', () => {
       await rm(reportDirectory, { recursive: true, force: true });
     }
   });
+
+  it('retries a trial lost to the infrastructure and keeps the recovered result', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-retry-')
+    );
+    let attempts = 0;
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: () => {
+            attempts += 1;
+            return attempts === 1
+              ? Promise.reject(new Error('429 rate limited'))
+              : Promise.resolve(successfulRun());
+          },
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+        retries: 2,
+      });
+      const record = result.records[0];
+
+      expect(attempts).toBe(2);
+      expect(record?.outcome.status).toBe('completed');
+      expect(record?.attempts).toBe(2);
+      expect(record?.passed).toBe(true);
+      // The lost attempt is visible without being counted against the model.
+      expect(record?.warnings[0]).toContain('retried after system_error');
+      expect(result.summary.invalidTrialCount).toBe(0);
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('never retries a trial that produced a real result', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-no-retry-')
+    );
+    let attempts = 0;
+    const failingTask: EvalTask = { ...task, expected: { maxTurns: 0 } };
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: () => {
+            attempts += 1;
+            return Promise.resolve(successfulRun());
+          },
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [failingTask],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+        retries: 3,
+      });
+
+      // Retrying a failure until it passes would be sampling to a conclusion.
+      expect(attempts).toBe(1);
+      expect(result.records[0]?.attempts).toBe(1);
+      expect(result.records[0]?.passed).toBe(false);
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a negative retry count', async () => {
+    await expect(
+      runSuite({
+        tasks: [task],
+        factory: successfulFactory(),
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory: 'unused',
+        retries: -1,
+      })
+    ).rejects.toThrow('retries must be zero or a positive integer');
+  });
+
+  it('times the trial itself instead of trusting the system to report it', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-clock-')
+    );
+    const latencyTask: EvalTask = {
+      ...task,
+      expected: { maxLatencyMs: 1000 },
+    };
+    const factory: SystemUnderTestFactory = {
+      create: () =>
+        Promise.resolve({
+          run: () =>
+            Promise.resolve({
+              ...successfulRun(),
+              metrics: { ...successfulRun().metrics, latencyMs: 900_000 },
+            }),
+        }),
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [latencyTask],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+      const record = result.records[0];
+      const latency = record?.grades.find(
+        (grade) => grade.grader === 'latency-budget'
+      );
+
+      // The system claims 900 seconds; the harness clock says otherwise.
+      expect(record?.durationMs).toBeLessThan(1000);
+      expect(latency?.passed).toBe(true);
+      expect(latency?.rationale).toContain('measured by the harness');
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
 });
 
 function successfulFactory(): SystemUnderTestFactory {

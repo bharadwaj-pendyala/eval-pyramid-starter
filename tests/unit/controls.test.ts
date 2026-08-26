@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { FakeJudgeProvider } from '../../src/adapters/fake-judge.js';
 import { runControls } from '../../src/harness/run-controls.js';
@@ -6,15 +10,45 @@ import { loadTasks } from '../../src/loaders/tasks.js';
 import type { EvalTask } from '../../src/types.js';
 
 describe('grader controls', () => {
+  let reportDirectory: string;
+
+  beforeEach(async () => {
+    reportDirectory = await mkdtemp(join(tmpdir(), 'eval-pyramid-controls-'));
+  });
+
+  afterEach(async () => {
+    await rm(reportDirectory, { recursive: true, force: true });
+  });
+
   it('accepts the shipped tasks under both controls', async () => {
-    const summary = await runControls(
-      await loadTasks('evals/tasks.jsonl'),
-      new FakeJudgeProvider()
-    );
+    const summary = await runControls(await loadTasks('evals/tasks.jsonl'), {
+      reportDirectory,
+      judgeProvider: new FakeJudgeProvider(),
+    });
 
     expect(summary.passed).toBe(true);
     expect(summary.checks).toHaveLength(6);
     expect(summary.checks.every((check) => check.passed)).toBe(true);
+  });
+
+  it('leaves an inspectable report for each control', async () => {
+    await runControls(await loadTasks('evals/tasks.jsonl'), {
+      reportDirectory,
+    });
+
+    const oracle = await readFile(
+      join(reportDirectory, 'oracle', 'summary.json'),
+      'utf8'
+    );
+    const nop = await readFile(
+      join(reportDirectory, 'nop', 'failures.md'),
+      'utf8'
+    );
+    expect(JSON.parse(oracle)).toMatchObject({
+      passAt1: 1,
+      provenance: { systemUnderTest: 'oracle' },
+    });
+    expect(nop).toContain('output-schema');
   });
 
   it('flags a task whose expectations cannot detect a failure', async () => {
@@ -26,7 +60,7 @@ describe('grader controls', () => {
       reference: { output: { message: 'A correct answer.' } },
     };
 
-    const summary = await runControls([permissive]);
+    const summary = await runControls([permissive], { reportDirectory });
     const nop = summary.checks.find((check) => check.control === 'nop');
 
     expect(summary.passed).toBe(false);
@@ -49,7 +83,7 @@ describe('grader controls', () => {
       reference: { output: { status: 'escalated' } },
     };
 
-    const summary = await runControls([contradictory]);
+    const summary = await runControls([contradictory], { reportDirectory });
     const oracle = summary.checks.find((check) => check.control === 'oracle');
 
     expect(summary.passed).toBe(false);
@@ -65,7 +99,7 @@ describe('grader controls', () => {
       expected: { maxTurns: 1 },
     };
 
-    const summary = await runControls([unproven]);
+    const summary = await runControls([unproven], { reportDirectory });
     const oracle = summary.checks.find((check) => check.control === 'oracle');
 
     expect(oracle?.passed).toBe(false);
@@ -73,7 +107,7 @@ describe('grader controls', () => {
   });
 
   it('requires at least one task', async () => {
-    await expect(runControls([])).rejects.toThrow(
+    await expect(runControls([], { reportDirectory })).rejects.toThrow(
       'At least one task is required'
     );
   });
