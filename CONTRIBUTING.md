@@ -7,6 +7,7 @@ Contributions should preserve the starter's main contract: a new user can run th
 ```bash
 npm ci
 npm run verify
+npm run eval:selftest
 npm run eval:ci
 npm run test:e2e
 ```
@@ -17,6 +18,7 @@ Use a conventional commit message such as `fix: reject invalid trial counts`. Ke
 
 - Use synthetic or properly de-identified data.
 - Give every task a stable, unique identifier.
+- Ship a `reference` answer with every task and keep `npm run eval:selftest` passing. A task the oracle cannot pass, or one the nop control can, is not ready to merge.
 - Prefer deterministic expected outcomes and tool policies before subjective rubrics.
 - Add boundary cases and prohibited actions, not only happy paths.
 - Do not weaken a threshold only to make a failing change pass.

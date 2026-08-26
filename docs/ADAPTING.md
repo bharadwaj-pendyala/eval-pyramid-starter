@@ -48,6 +48,28 @@ Start with cases that have machine-checkable answers:
 
 Add a rubric only when the behavior cannot be expressed reliably as a deterministic assertion. Keep each rubric criterion atomic and give it a human-scored golden set.
 
+## Ship a reference answer with every task
+
+Give each task a `reference` block holding the output a correct system would produce, and the outcome and tool calls that go with it when they differ from `expected`:
+
+```json
+{
+  "id": "example-task",
+  "expected": { "...": "..." },
+  "reference": {
+    "output": { "status": "resolved" },
+    "outcome": { "ticket": { "status": "resolved" } },
+    "toolCalls": [{ "name": "verify_identity", "arguments": {} }]
+  }
+}
+```
+
+`npm run eval:selftest` replays it through every grader the task declares and separately checks that an empty result is rejected. Run it whenever you add or change a task: a control failure means the task is wrong, and no score from it is worth reading.
+
+## Expect trials that measure nothing
+
+When your adapter throws, a grader crashes, or the judge is unreachable, the harness records the trial as invalid and keeps it out of every rate. Give the adapter its own timeouts and retries so a transient provider error does not become an invalid trial, and watch the invalid rate in the report: a run with many of them is not a run with a low score, it is a run that did not measure.
+
 ## Preserve trial isolation
 
 The harness creates a separate temporary workspace and a fresh adapter for every trial. Your adapter is still responsible for isolating external resources. Use a disposable tenant, namespace, database transaction, or mocked tool layer. Never point destructive eval tools at production.

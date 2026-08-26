@@ -7,6 +7,8 @@ test('renders a responsive eval report', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Summary' })).toBeVisible();
   await expect(page.getByTestId('summary-cards')).toBeVisible();
   await expect(page.getByRole('table')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Provenance' })).toBeVisible();
+  await expect(page.getByText(/scored, \d+ invalid/u)).toBeVisible();
 
   const overflows = await page.evaluate(
     () =>

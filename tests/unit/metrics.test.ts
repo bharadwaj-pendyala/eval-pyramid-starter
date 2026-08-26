@@ -5,7 +5,20 @@ import {
   passAtK,
   passPowerK,
 } from '../../src/harness/metrics.js';
-import type { TrialRecord } from '../../src/types.js';
+import { completed, invalid } from '../../src/harness/outcomes.js';
+import type {
+  ReleaseThresholds,
+  TrialOutcome,
+  TrialRecord,
+} from '../../src/types.js';
+
+const thresholds: ReleaseThresholds = {
+  deterministicPassRate: 0.5,
+  passAt1: 0.5,
+  passPowerK: 0.5,
+  judgeAverage: 0.5,
+  maxInvalidRate: 0.5,
+};
 
 describe('reliability estimators', () => {
   it('computes finite-sample pass@k and pass^k', () => {
@@ -28,30 +41,97 @@ describe('reliability estimators', () => {
 
   it('summarizes task and judge reliability against release gates', () => {
     const records = [record('b-task', true, 1), record('a-task', false, 0)];
-    const summary = computeReliabilitySummary(records, 1, 'metrics-test', {
-      deterministicPassRate: 0.5,
-      passAt1: 0.5,
-      passPowerK: 0.5,
-      judgeAverage: 0.5,
-    });
+    const summary = computeReliabilitySummary(
+      records,
+      1,
+      'metrics-test',
+      thresholds
+    );
 
     expect(summary.tasks.map((item) => item.taskId)).toEqual([
       'a-task',
       'b-task',
     ]);
     expect(summary.judgeAverage).toBe(0.5);
+    expect(summary.scoredTrialCount).toBe(2);
+    expect(summary.invalidTrialCount).toBe(0);
     expect(summary.releaseGate.passed).toBe(true);
-    expect(summary.releaseGate.checks).toHaveLength(4);
+    expect(summary.releaseGate.checks.map((check) => check.name)).toEqual([
+      'deterministic pass rate',
+      'pass@1',
+      'pass^k',
+      'invalid trial rate',
+      'judge average',
+    ]);
+  });
+
+  it('keeps invalid trials out of every rate', () => {
+    const records = [
+      record('a-task', true, 1),
+      record('a-task', false, 0, invalid('system_error', 'adapter exploded')),
+    ];
+    const summary = computeReliabilitySummary(
+      records,
+      1,
+      'invalid-test',
+      thresholds
+    );
+    const task = summary.tasks[0];
+
+    expect(summary.trialCount).toBe(2);
+    expect(summary.scoredTrialCount).toBe(1);
+    expect(summary.invalidRate).toBe(0.5);
+    expect(task?.trials).toBe(2);
+    expect(task?.scoredTrials).toBe(1);
+    expect(task?.invalidTrials).toBe(1);
+    // The one trial that measured anything passed, so the rate is 100%.
+    expect(summary.passAt1).toBe(1);
+    expect(summary.deterministicPassRate).toBe(1);
+    expect(summary.judgeAverage).toBe(1);
+  });
+
+  it('fails the gate when too many trials measured nothing', () => {
+    const records = [
+      record('a-task', true, 1),
+      record('a-task', true, 1, invalid('harness_error', 'disk full')),
+      record('a-task', true, 1, invalid('harness_error', 'disk full')),
+    ];
+    const summary = computeReliabilitySummary(records, 1, 'gate-test', {
+      ...thresholds,
+      maxInvalidRate: 0.1,
+    });
+    const check = summary.releaseGate.checks.find(
+      (item) => item.name === 'invalid trial rate'
+    );
+
+    expect(check).toMatchObject({ mode: 'maximum', passed: false });
+    expect(summary.releaseGate.passed).toBe(false);
+  });
+
+  it('reports nothing rather than zero when a sample is too small for k', () => {
+    const records = [
+      record('a-task', true, 1),
+      record('a-task', false, 0, invalid('judge_error', 'judge unavailable')),
+    ];
+    const summary = computeReliabilitySummary(
+      records,
+      2,
+      'small-sample',
+      thresholds
+    );
+    const task = summary.tasks[0];
+
+    expect(task?.passAt1).toBe(1);
+    expect(task?.passAtK).toBeNull();
+    expect(task?.passPowerK).toBeNull();
+    expect(summary.passPowerK).toBeNull();
+    expect(
+      summary.releaseGate.checks.find((check) => check.name === 'pass^k')
+        ?.passed
+    ).toBe(false);
   });
 
   it('rejects empty records and k larger than a task sample', () => {
-    const thresholds = {
-      deterministicPassRate: 1,
-      passAt1: 1,
-      passPowerK: 1,
-      judgeAverage: 1,
-    };
-
     expect(() => computeReliabilitySummary([], 1, 'empty', thresholds)).toThrow(
       'Cannot summarize an empty eval run'
     );
@@ -69,7 +149,8 @@ describe('reliability estimators', () => {
 function record(
   taskId: string,
   passed: boolean,
-  judgeScore: number
+  judgeScore: number,
+  outcome: TrialOutcome = completed()
 ): TrialRecord {
   return {
     taskId,
@@ -95,7 +176,9 @@ function record(
         rationale: 'Test judge result.',
       },
     ],
-    error: null,
+    outcome,
+    warnings: [],
+    error: outcome.detail,
     deterministicPassed: passed,
     judgePassed: passed,
     passed,

@@ -19,34 +19,78 @@
       "additionalProperties": false,
       "required": ["customerId", "message"],
       "properties": {
-        "customerId": { "type": "string", "minLength": 1 },
-        "message": { "type": "string", "minLength": 1 }
+        "customerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "expected": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "outputSchema": { "type": "object" },
-        "outcome": { "type": "object" },
+        "outputSchema": {
+          "type": "object"
+        },
+        "outcome": {
+          "type": "object"
+        },
         "requiredTools": {
           "type": "array",
-          "items": { "$ref": "#/$defs/toolExpectation" }
+          "items": {
+            "$ref": "#/$defs/toolExpectation"
+          }
         },
         "forbiddenTools": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "uniqueItems": true
         },
-        "maxTurns": { "type": "integer", "minimum": 1 },
-        "maxCostUsd": { "type": "number", "minimum": 0 },
-        "maxLatencyMs": { "type": "number", "minimum": 0 }
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxLatencyMs": {
+          "type": "number",
+          "minimum": 0
+        }
       },
       "minProperties": 1
     },
     "rubric": {
       "type": "array",
-      "items": { "$ref": "#/$defs/rubricCriterion" }
+      "items": {
+        "$ref": "#/$defs/rubricCriterion"
+      }
+    },
+    "reference": {
+      "description": "A known-good answer for this task. Control runs replay it to prove the graders accept a correct result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output"],
+      "properties": {
+        "output": {},
+        "outcome": {
+          "type": "object"
+        },
+        "toolCalls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolCall"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -55,8 +99,13 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "arguments": { "type": "object" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        }
       }
     },
     "rubricCriterion": {
@@ -64,14 +113,41 @@
       "additionalProperties": false,
       "required": ["id", "description", "minimumScore"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-        "description": { "type": "string", "minLength": 10 },
-        "minimumScore": { "type": "number", "minimum": 0, "maximum": 1 },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10
+        },
+        "minimumScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
         "requiredSignals": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "minItems": 1,
           "uniqueItems": true
+        }
+      }
+    },
+    "toolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "arguments"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
         }
       }
     }

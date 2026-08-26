@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run eval:deterministic && playwright test",
+    "eval:selftest": "tsx src/cli.ts selftest --judge fake",
     "eval:deterministic": "tsx src/cli.ts run --trials 1 --k 1 --judge none",
     "eval:repeat": "tsx src/cli.ts run --trials 5 --k 3 --judge none",
     "eval:judge": "tsx src/cli.ts calibrate --judge fake",

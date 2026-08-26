@@ -13,9 +13,13 @@ import type {
   ReleaseThresholds,
   SystemUnderTest,
   SystemUnderTestFactory,
+  TrialOutcome,
   TrialRecord,
+  TrialStatus,
 } from '../types.js';
 import { computeReliabilitySummary } from './metrics.js';
+import { completed, invalid } from './outcomes.js';
+import { computeProvenance } from './provenance.js';
 import { writeReports } from './write-reports.js';
 
 export interface RunSuiteOptions {
@@ -28,6 +32,9 @@ export interface RunSuiteOptions {
   reportDirectory: string;
   judgeProvider?: JudgeProvider;
   runId?: string;
+  /** Recorded in the report so a result names the system it measured. */
+  systemLabel?: string;
+  taskFile?: string;
 }
 
 export interface RunSuiteResult {
@@ -64,11 +71,23 @@ export async function runSuite(
       left.trialIndex - right.trialIndex
   );
 
+  const provenance = await computeProvenance({
+    tasks: options.tasks,
+    thresholds: options.thresholds,
+    trials: options.trials,
+    k: options.k,
+    concurrency: options.concurrency,
+    systemUnderTest: options.systemLabel ?? options.factory.constructor.name,
+    judge: options.judgeProvider?.name,
+    taskFile: options.taskFile,
+  });
+
   const summary = computeReliabilitySummary(
     records,
     options.k,
     runId,
-    options.thresholds
+    options.thresholds,
+    provenance
   );
   await writeReports(options.reportDirectory, summary, records);
   return { records, summary };
@@ -81,12 +100,21 @@ async function runTrial(
   factory: SystemUnderTestFactory,
   judgeProvider: JudgeProvider | undefined
 ): Promise<TrialRecord> {
-  let workspace: string | undefined;
-  let system: SystemUnderTest | undefined;
-  let record: TrialRecord;
-
+  let workspace: string;
   try {
     workspace = await mkdtemp(join(tmpdir(), 'eval-pyramid-trial-'));
+  } catch (error) {
+    return invalidTrial(
+      task,
+      trialIndex,
+      'harness_error',
+      errorMessage(error, 'Could not create a trial workspace')
+    );
+  }
+
+  let system: SystemUnderTest | undefined;
+  let record: TrialRecord;
+  try {
     system = await factory.create();
     record = await executeTrial(
       task,
@@ -97,18 +125,18 @@ async function runTrial(
       judgeProvider
     );
   } catch (error) {
-    record = failedTrial(
+    record = invalidTrial(
       task,
       trialIndex,
-      errorMessage(error, 'Unknown system-under-test error'),
-      judgeProvider !== undefined
+      'system_error',
+      errorMessage(error, 'Unknown system-under-test error')
     );
   }
 
-  const cleanupErrors = await cleanupTrial(system, workspace);
-  return cleanupErrors.length > 0
-    ? appendOperationalFailure(record, 'cleanup', cleanupErrors.join('; '))
-    : record;
+  // Cleanup happens after the measurement, so its failures are operational
+  // noise rather than evidence about the system under test.
+  const warnings = await cleanupTrial(system, workspace);
+  return warnings.length > 0 ? { ...record, warnings } : record;
 }
 
 async function executeTrial(
@@ -119,7 +147,17 @@ async function executeTrial(
   system: SystemUnderTest,
   judgeProvider: JudgeProvider | undefined
 ): Promise<TrialRecord> {
-  const run = await system.run(task, { runId, trialIndex, workspace });
+  let run: AgentRun;
+  try {
+    run = await system.run(task, { runId, trialIndex, workspace });
+  } catch (error) {
+    return invalidTrial(
+      task,
+      trialIndex,
+      'system_error',
+      errorMessage(error, 'Unknown system-under-test error')
+    );
+  }
 
   let deterministicGrades: Grade[];
   try {
@@ -127,43 +165,60 @@ async function executeTrial(
   } catch (error) {
     const message = errorMessage(error, 'Unknown deterministic grader error');
     return {
-      taskId: task.id,
-      trialIndex,
+      ...invalidTrial(task, trialIndex, 'grader_error', message),
       run,
       grades: [runtimeGrade('deterministic:runtime', message)],
-      error: message,
-      deterministicPassed: false,
-      judgePassed: judgeProvider ? false : null,
-      passed: false,
     };
   }
 
-  let judgeGrades: Grade[] = [];
-  let judgeError: string | null = null;
-  if (judgeProvider) {
-    try {
-      judgeGrades = await gradeWithJudge(task, run, judgeProvider);
-    } catch (error) {
-      judgeError = errorMessage(error, 'Unknown judge error');
-      judgeGrades = judgeRuntimeGrades(task, judgeError);
-    }
-  }
-
-  const grades = [...deterministicGrades, ...judgeGrades];
   const deterministicPassed = deterministicGrades.every(
     (grade) => grade.passed
   );
-  const judgePassed =
-    judgeGrades.length > 0 ? judgeGrades.every((grade) => grade.passed) : null;
+
+  if (judgeProvider) {
+    try {
+      const judgeGrades = await gradeWithJudge(task, run, judgeProvider);
+      const grades = [...deterministicGrades, ...judgeGrades];
+      const judgePassed =
+        judgeGrades.length > 0
+          ? judgeGrades.every((grade) => grade.passed)
+          : null;
+      return {
+        taskId: task.id,
+        trialIndex,
+        run,
+        grades,
+        outcome: completed(),
+        warnings: [],
+        error: null,
+        deterministicPassed,
+        judgePassed,
+        passed: deterministicPassed && judgePassed !== false,
+      };
+    } catch (error) {
+      // The deterministic evidence survives, but no verdict exists for this
+      // trial, so it must not count as a model failure.
+      const message = errorMessage(error, 'Unknown judge error');
+      return {
+        ...invalidTrial(task, trialIndex, 'judge_error', message),
+        run,
+        grades: [...deterministicGrades, ...judgeRuntimeGrades(task, message)],
+        deterministicPassed,
+      };
+    }
+  }
+
   return {
     taskId: task.id,
     trialIndex,
     run,
-    grades,
-    error: judgeError,
+    grades: deterministicGrades,
+    outcome: completed(),
+    warnings: [],
+    error: null,
     deterministicPassed,
-    judgePassed,
-    passed: deterministicPassed && judgePassed !== false,
+    judgePassed: null,
+    passed: deterministicPassed,
   };
 }
 
@@ -179,11 +234,11 @@ async function cleanupTrial(
   system: SystemUnderTest | undefined,
   workspace: string | undefined
 ): Promise<string[]> {
-  const errors: string[] = [];
+  const warnings: string[] = [];
   try {
     await system?.dispose?.();
   } catch (error) {
-    errors.push(
+    warnings.push(
       `System disposal failed: ${errorMessage(error, 'unknown error')}`
     );
   }
@@ -192,41 +247,31 @@ async function cleanupTrial(
     try {
       await rm(workspace, { recursive: true, force: true });
     } catch (error) {
-      errors.push(
+      warnings.push(
         `Workspace cleanup failed: ${errorMessage(error, 'unknown error')}`
       );
     }
   }
-  return errors;
+  return warnings;
 }
 
-function failedTrial(
+function invalidTrial(
   task: EvalTask,
   trialIndex: number,
-  message: string,
-  judgeEnabled: boolean
+  status: TrialStatus,
+  message: string
 ): TrialRecord {
+  const outcome: TrialOutcome = invalid(status, message);
   return {
     taskId: task.id,
     trialIndex,
     run: failedRun(),
-    grades: [runtimeGrade('runtime', message)],
+    grades: [runtimeGrade(status, message)],
+    outcome,
+    warnings: [],
     error: message,
     deterministicPassed: false,
-    judgePassed: judgeEnabled ? false : null,
-    passed: false,
-  };
-}
-
-function appendOperationalFailure(
-  record: TrialRecord,
-  grader: string,
-  message: string
-): TrialRecord {
-  return {
-    ...record,
-    grades: [...record.grades, runtimeGrade(grader, message)],
-    error: record.error ? `${record.error}; ${message}` : message,
+    judgePassed: null,
     passed: false,
   };
 }

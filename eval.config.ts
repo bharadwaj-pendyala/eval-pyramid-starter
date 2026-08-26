@@ -9,6 +9,7 @@ const config: EvalConfig = {
     passAt1: 0.8,
     passPowerK: 0.5,
     judgeAverage: 0.8,
+    maxInvalidRate: 0,
   },
 };
 

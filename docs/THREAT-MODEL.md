@@ -10,6 +10,9 @@ This template assumes eval inputs and model outputs are untrusted. The most impo
 - A malformed model response bypasses a grader.
 - A compromised dependency or pull request gains access to repository secrets.
 - Aggregate metrics conceal a rare but severe failure.
+- A grader accepts any output, so a broken system reports a passing score.
+- Harness or provider failures are counted as model results, moving a release decision.
+- A report is compared against an earlier one that measured different fixtures or thresholds.
 
 ## Included controls
 
@@ -18,9 +21,14 @@ This template assumes eval inputs and model outputs are untrusted. The most impo
 - JSON Schema validates task fixtures, and the model judge validates strict structured output.
 - Trial workspaces and system instances are isolated.
 - Forbidden-tool, outcome, budget, and release-gate checks fail closed.
+- Oracle and nop controls check that each task's graders accept a correct answer and reject an empty one.
+- Trials that did not reach a verdict are excluded from every rate, and the release gate caps how many of them a run may contain.
+- Reports carry digests of the task set and run configuration, the Git revision, and a schema version.
 - HTML output is escaped, common secrets are redacted, and the local report server sets a restrictive content security policy.
 - GitHub workflows request read-only repository contents and do not use pull-request secrets.
 
 ## Controls you must add
 
 Use disposable infrastructure, least-privilege credentials, provider retention settings, application-specific redaction, network egress restrictions, per-operation timeouts, and approval gates that match your system's impact. Review failed and uncertain trials rather than relying on an aggregate score alone.
+
+Two boundaries deserve attention before this template measures anything consequential. The system under test runs in the harness process, so an adapter you did not write is inside the trust boundary: run a real agent out of process, in a sandbox, with its own network and filesystem limits. Cost, turn, and latency budgets are graded from metrics the adapter reports about itself, so meter them independently before relying on a budget grade to stop a runaway run.

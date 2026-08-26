@@ -19,6 +19,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run eval:selftest
       - run: npm run eval:ci
       - name: Upload eval evidence
         if: always()

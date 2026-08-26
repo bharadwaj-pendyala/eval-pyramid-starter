@@ -9,6 +9,7 @@ import type {
   AgentRun,
   EvalTask,
   JudgeProvider,
+  ReleaseThresholds,
   SystemUnderTestFactory,
 } from '../../src/types.js';
 
@@ -19,15 +20,16 @@ const task: EvalTask = {
   expected: { maxTurns: 1 },
 };
 
-const thresholds = {
+const thresholds: ReleaseThresholds = {
   deterministicPassRate: 1,
   passAt1: 1,
   passPowerK: 1,
   judgeAverage: 1,
+  maxInvalidRate: 0,
 };
 
 describe('run suite boundaries', () => {
-  it('captures adapter failures, disposes the system, and creates a run id', async () => {
+  it('records adapter failures as invalid rather than as model failures', async () => {
     const reportDirectory = await mkdtemp(
       join(tmpdir(), 'eval-pyramid-runtime-')
     );
@@ -53,9 +55,20 @@ describe('run suite boundaries', () => {
         thresholds,
         reportDirectory,
       });
+      const record = result.records[0];
 
-      expect(result.records[0]?.error).toBe('adapter exploded');
-      expect(result.records[0]?.grades[0]?.grader).toBe('runtime');
+      expect(record?.error).toBe('adapter exploded');
+      expect(record?.outcome).toEqual({
+        status: 'system_error',
+        scored: false,
+        detail: 'adapter exploded',
+      });
+      expect(result.summary.scoredTrialCount).toBe(0);
+      expect(result.summary.invalidRate).toBe(1);
+      // Nothing was measured, so no reliability number may be reported.
+      expect(result.summary.passAt1).toBeNull();
+      expect(result.summary.deterministicPassRate).toBeNull();
+      expect(result.summary.releaseGate.passed).toBe(false);
       expect(result.summary.runId).not.toBe('');
       expect(disposed).toBe(true);
     } finally {
@@ -111,13 +124,14 @@ describe('run suite boundaries', () => {
       });
 
       expect(result.records[0]?.error).toBe('authentication failed');
-      expect(result.records[0]?.passed).toBe(false);
+      expect(result.records[0]?.outcome.status).toBe('system_error');
+      expect(result.records[0]?.outcome.scored).toBe(false);
     } finally {
       await rm(reportDirectory, { recursive: true, force: true });
     }
   });
 
-  it('retains run evidence and deterministic grades when the judge fails', async () => {
+  it('keeps deterministic evidence but scores nothing when the judge fails', async () => {
     const reportDirectory = await mkdtemp(
       join(tmpdir(), 'eval-pyramid-judge-failure-')
     );
@@ -151,18 +165,52 @@ describe('run suite boundaries', () => {
 
       expect(record?.run.output).toEqual({ status: 'complete' });
       expect(record?.deterministicPassed).toBe(true);
-      expect(record?.judgePassed).toBe(false);
+      expect(record?.judgePassed).toBeNull();
+      expect(record?.outcome.status).toBe('judge_error');
+      expect(record?.outcome.scored).toBe(false);
       expect(record?.grades.map((grade) => grade.grader)).toEqual([
         'turn-budget',
         'judge:quality:runtime',
       ]);
       expect(record?.error).toBe('judge unavailable');
+      // A judge outage must not be reported as a low judge score.
+      expect(result.summary.judgeAverage).toBeNull();
     } finally {
       await rm(reportDirectory, { recursive: true, force: true });
     }
   });
 
-  it('removes the workspace even when system disposal fails', async () => {
+  it('reports grader crashes as invalid instead of blaming the system', async () => {
+    const reportDirectory = await mkdtemp(
+      join(tmpdir(), 'eval-pyramid-grader-')
+    );
+    const brokenTask: EvalTask = {
+      ...task,
+      id: 'broken-grader',
+      expected: { outputSchema: { type: 'not-a-real-type' } },
+    };
+
+    try {
+      const result = await runSuite({
+        tasks: [brokenTask],
+        factory: successfulFactory(),
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+      });
+      const record = result.records[0];
+
+      expect(record?.outcome.status).toBe('grader_error');
+      expect(record?.outcome.scored).toBe(false);
+      expect(record?.run.output).toEqual({ status: 'complete' });
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('treats cleanup failures as warnings, not as a failed trial', async () => {
     const reportDirectory = await mkdtemp(
       join(tmpdir(), 'eval-pyramid-cleanup-')
     );
@@ -188,10 +236,47 @@ describe('run suite boundaries', () => {
         thresholds,
         reportDirectory,
       });
+      const record = result.records[0];
 
-      expect(result.records[0]?.passed).toBe(false);
-      expect(result.records[0]?.error).toContain('System disposal failed');
+      expect(record?.passed).toBe(true);
+      expect(record?.outcome.status).toBe('completed');
+      expect(record?.error).toBeNull();
+      expect(record?.warnings).toEqual([
+        'System disposal failed: close failed',
+      ]);
+      expect(result.summary.passAt1).toBe(1);
+      expect(result.summary.releaseGate.passed).toBe(true);
       await expect(access(trialWorkspace)).rejects.toThrow();
+    } finally {
+      await rm(reportDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('stamps the report with what produced it', async () => {
+    const reportDirectory = await mkdtemp(join(tmpdir(), 'eval-pyramid-prov-'));
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory: successfulFactory(),
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportDirectory,
+        systemLabel: 'unit-system',
+        taskFile: 'tests/inline.jsonl',
+      });
+      const provenance = result.summary.provenance;
+
+      expect(provenance?.systemUnderTest).toBe('unit-system');
+      expect(provenance?.judge).toBeNull();
+      expect(provenance?.taskFile).toBe('tests/inline.jsonl');
+      expect(provenance?.taskDigests).toHaveLength(1);
+      expect(provenance?.taskDigests[0]?.taskId).toBe(task.id);
+      expect(provenance?.taskDigests[0]?.digest).toMatch(/^[0-9a-f]{64}$/u);
+      expect(provenance?.taskSetDigest).toMatch(/^[0-9a-f]{64}$/u);
+      expect(provenance?.configDigest).toMatch(/^[0-9a-f]{64}$/u);
     } finally {
       await rm(reportDirectory, { recursive: true, force: true });
     }
