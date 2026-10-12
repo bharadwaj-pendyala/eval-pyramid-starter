@@ -48,6 +48,16 @@ Start with cases that have machine-checkable answers:
 
 Add a rubric only when the behavior cannot be expressed reliably as a deterministic assertion. Keep each rubric criterion atomic and give it a human-scored golden set.
 
+## Choose a model judge
+
+Rubric criteria are scored by a `JudgeProvider` (see [`src/types.ts`](../src/types.ts)). The starter ships three:
+
+- `fake` — the offline signal judge, the default. It needs no credentials and matches `requiredSignals`, so every layer runs without an API key.
+- `openai` — calls the OpenAI Responses API. Set `OPENAI_API_KEY` and optionally `OPENAI_JUDGE_MODEL`.
+- `anthropic` (alias `claude`) — calls the Anthropic Claude Messages API ([`src/adapters/anthropic-judge.ts`](../src/adapters/anthropic-judge.ts)). Set `ANTHROPIC_API_KEY` and optionally `ANTHROPIC_JUDGE_MODEL` (default `claude-opus-5-5`).
+
+Select one with `--judge <mode>` on `run` or `calibrate`. Each hosted adapter requests structured JSON and returns the same `JudgeScore` (`score`, `confidence`, `rationale`, `unknown`), so you can swap providers without touching graders, calibration, or reports. To add another provider, implement `JudgeProvider`, mirror one of the existing adapters, and wire a new mode in [`src/cli.ts`](../src/cli.ts). Calibrate every judge against a human-scored golden set before trusting its scores.
+
 ## Preserve trial isolation
 
 The harness creates a separate temporary workspace and a fresh adapter for every trial. Your adapter is still responsible for isolating external resources. Use a disposable tenant, namespace, database transaction, or mocked tool layer. Never point destructive eval tools at production.
