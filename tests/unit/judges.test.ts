@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { AnthropicJudgeProvider } from '../../src/adapters/anthropic-judge.js';
 import { FakeJudgeProvider } from '../../src/adapters/fake-judge.js';
 import { OpenAIJudgeProvider } from '../../src/adapters/openai-judge.js';
 import { gradeWithJudge } from '../../src/graders/model-judge.js';
@@ -190,6 +191,90 @@ describe('judge providers', () => {
     await expect(provider.score(request())).rejects.toThrow(
       'invalid structured score'
     );
+  });
+
+  it('parses a structured Anthropic Messages result', async () => {
+    const provider = new AnthropicJudgeProvider({
+      apiKey: 'test-key',
+      model: 'test-model',
+      fetchImpl: () =>
+        Promise.resolve(
+          Response.json({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  score: 1,
+                  confidence: 0.9,
+                  rationale: 'Grounded.',
+                  unknown: false,
+                }),
+              },
+            ],
+          })
+        ),
+    });
+
+    await expect(provider.score(request())).resolves.toEqual({
+      score: 1,
+      confidence: 0.9,
+      rationale: 'Grounded.',
+      unknown: false,
+    });
+  });
+
+  it('skips thinking blocks when reading the Anthropic text block', async () => {
+    const provider = new AnthropicJudgeProvider({
+      apiKey: 'test-key',
+      model: 'test-model',
+      fetchImpl: () =>
+        Promise.resolve(
+          Response.json({
+            content: [
+              { type: 'thinking', thinking: 'Considering the policy...' },
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  score: 0.5,
+                  confidence: 0.4,
+                  rationale: 'Partial.',
+                  unknown: false,
+                }),
+              },
+            ],
+          })
+        ),
+    });
+
+    await expect(provider.score(request())).resolves.toEqual({
+      score: 0.5,
+      confidence: 0.4,
+      rationale: 'Partial.',
+      unknown: false,
+    });
+  });
+
+  it('fails closed on a malformed Anthropic structured output', async () => {
+    const provider = new AnthropicJudgeProvider({
+      apiKey: 'test-key',
+      model: 'test-model',
+      fetchImpl: () =>
+        Promise.resolve(
+          Response.json({
+            content: [{ type: 'text', text: '{"score":2}' }],
+          })
+        ),
+    });
+
+    await expect(provider.score(request())).rejects.toThrow(
+      'invalid structured score'
+    );
+  });
+
+  it('requires a non-empty Anthropic API key', () => {
+    expect(
+      () => new AnthropicJudgeProvider({ apiKey: '  ', model: 'test-model' })
+    ).toThrow('non-empty API key');
   });
 });
 

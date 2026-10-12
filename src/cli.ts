@@ -1,4 +1,5 @@
 import config from '../eval.config.js';
+import { AnthropicJudgeProvider } from './adapters/anthropic-judge.js';
 import { FakeJudgeProvider } from './adapters/fake-judge.js';
 import { FakeRefundAgentFactory } from './adapters/fake-refund-agent.js';
 import { OpenAIJudgeProvider } from './adapters/openai-judge.js';
@@ -58,7 +59,9 @@ async function calibrateCommand(args: string[]): Promise<void> {
   const judgeMode = stringFlag(args, '--judge', 'fake');
   const provider = createJudge(judgeMode);
   if (!provider)
-    throw new Error('Calibration requires --judge fake or --judge openai.');
+    throw new Error(
+      'Calibration requires --judge fake, --judge openai, or --judge anthropic.'
+    );
   const summary = await calibrateJudge(provider);
   console.log(JSON.stringify(summary, null, 2));
   if (!summary.passed) process.exitCode = 1;
@@ -72,8 +75,13 @@ function createJudge(mode: string): JudgeProvider | undefined {
     const model = process.env['OPENAI_JUDGE_MODEL'] ?? 'gpt-5-mini';
     return new OpenAIJudgeProvider({ apiKey, model });
   }
+  if (mode === 'anthropic' || mode === 'claude') {
+    const apiKey = process.env['ANTHROPIC_API_KEY'] ?? '';
+    const model = process.env['ANTHROPIC_JUDGE_MODEL'] ?? 'claude-opus-5-5';
+    return new AnthropicJudgeProvider({ apiKey, model });
+  }
   throw new Error(
-    `Unsupported judge mode: ${mode}. Use none, fake, or openai.`
+    `Unsupported judge mode: ${mode}. Use none, fake, openai, or anthropic.`
   );
 }
 
@@ -140,9 +148,9 @@ function printHelp(): void {
   npm run eval:review
 
 Direct CLI:
-  tsx src/cli.ts run [--trials N] [--k N] [--judge none|fake|openai]
+  tsx src/cli.ts run [--trials N] [--k N] [--judge none|fake|openai|anthropic]
                        [--failure-every N] [--fail-on-gate]
-  tsx src/cli.ts calibrate [--judge fake|openai]
+  tsx src/cli.ts calibrate [--judge fake|openai|anthropic]
   tsx src/cli.ts review`);
 }
 

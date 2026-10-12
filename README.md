@@ -30,7 +30,7 @@ The generated report includes aggregate reliability, per-trial results, failures
 
 ```text
 evals/                  Versioned task fixtures and judge golden set
-src/adapters/           Offline system and judge adapters, plus an OpenAI judge adapter
+src/adapters/           Offline system and judge adapters, plus OpenAI and Anthropic (Claude) judge adapters
 src/graders/            Deterministic and rubric graders
 src/harness/            Isolated trial runner, reliability metrics, and reports
 src/reporting/          Redaction and human review utilities
@@ -70,7 +70,12 @@ npm run verify                             # Format, types, lint, coverage, and 
 4. Build a human-scored golden set for every model judge and run calibration before trusting its scores.
 5. Set release thresholds from a reviewed baseline. Do not copy the example values into production without evidence.
 
-The included OpenAI judge is optional. Set `OPENAI_API_KEY`, optionally set `OPENAI_JUDGE_MODEL`, and run `tsx src/cli.ts calibrate --judge openai`. The system-under-test interface itself has no provider dependency.
+The included model judges are optional and provider-neutral in shape:
+
+- OpenAI: set `OPENAI_API_KEY`, optionally set `OPENAI_JUDGE_MODEL`, and run `tsx src/cli.ts calibrate --judge openai`.
+- Anthropic (Claude): set `ANTHROPIC_API_KEY`, optionally set `ANTHROPIC_JUDGE_MODEL` (default `claude-opus-5-5`), and run `tsx src/cli.ts calibrate --judge anthropic` (`--judge claude` is accepted as an alias).
+
+Both adapters emit the same `JudgeScore` shape, so deterministic graders, calibration, and reporting are unchanged. The system-under-test interface itself has no provider dependency.
 
 See [Adapting the starter](docs/ADAPTING.md) for the contract and [Design and limits](docs/DESIGN.md) for the decisions this template makes deliberately.
 
