@@ -6,42 +6,75 @@ import { describe, expect, it } from 'vitest';
 
 import { runSuite } from '../../src/harness/run-suite.js';
 import type {
-  AgentRun,
   EvalTask,
   JudgeProvider,
+  ObservedEvidence,
+  ReleaseThresholds,
+  SystemRun,
   SystemUnderTestFactory,
+  TrialEnvironment,
 } from '../../src/types.js';
 
 const task: EvalTask = {
   id: 'runtime-failure',
   description: 'Capture a runtime failure as a failed trial.',
-  input: { customerId: 'test', message: 'Run the failing system.' },
+  severity: 'medium',
+  input: { message: 'Run the system.' },
   expected: { maxTurns: 1 },
 };
 
-const thresholds = {
+const thresholds: ReleaseThresholds = {
   deterministicPassRate: 1,
   passAt1: 1,
   passPowerK: 1,
   judgeAverage: 1,
+  criticalPassRate: 1,
+  requireJudge: false,
+  requireIndependentEvidence: true,
 };
 
 describe('run suite boundaries', () => {
-  it('captures adapter failures, disposes the system, and creates a run id', async () => {
-    const reportDirectory = await mkdtemp(
-      join(tmpdir(), 'eval-pyramid-runtime-')
-    );
+  it('passes only the task input to the system under test', async () => {
+    const reportRoot = await temporaryRoot('oracle');
+    let received: unknown;
+    const factory = factoryFor({
+      system: {
+        run: (input) => {
+          received = input;
+          return Promise.resolve(successfulRun());
+        },
+      },
+      observer: { observe: () => Promise.resolve(observed()) },
+    });
+
+    try {
+      await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportRoot,
+      });
+
+      expect(received).toEqual(task.input);
+    } finally {
+      await rm(reportRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('captures system failures, disposes the environment, and creates a run id', async () => {
+    const reportRoot = await temporaryRoot('runtime');
     let disposed = false;
-    const factory: SystemUnderTestFactory = {
-      create: () =>
-        Promise.resolve({
-          run: () => Promise.reject(new Error('adapter exploded')),
-          dispose: () => {
-            disposed = true;
-            return Promise.resolve();
-          },
-        }),
-    };
+    const factory = factoryFor({
+      system: { run: () => Promise.reject(new Error('adapter exploded')) },
+      observer: { observe: () => Promise.resolve(observed()) },
+      dispose: () => {
+        disposed = true;
+        return Promise.resolve();
+      },
+    });
 
     try {
       const result = await runSuite({
@@ -51,7 +84,7 @@ describe('run suite boundaries', () => {
         k: 1,
         concurrency: 1,
         thresholds,
-        reportDirectory,
+        reportRoot,
       });
 
       expect(result.records[0]?.error).toBe('adapter exploded');
@@ -59,12 +92,14 @@ describe('run suite boundaries', () => {
       expect(result.summary.runId).not.toBe('');
       expect(disposed).toBe(true);
     } finally {
-      await rm(reportDirectory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 
   it('rejects invalid suite options before running', async () => {
     const factory: SystemUnderTestFactory = {
+      name: 'never',
+      evidenceSource: 'never',
       create: () => Promise.reject(new Error('must not create')),
     };
     const base = {
@@ -74,7 +109,7 @@ describe('run suite boundaries', () => {
       k: 1,
       concurrency: 1,
       thresholds,
-      reportDirectory: 'unused',
+      reportRoot: 'unused',
     };
 
     await expect(runSuite({ ...base, tasks: [] })).rejects.toThrow(
@@ -91,11 +126,11 @@ describe('run suite boundaries', () => {
     );
   });
 
-  it('records factory setup failures instead of aborting the suite', async () => {
-    const reportDirectory = await mkdtemp(
-      join(tmpdir(), 'eval-pyramid-setup-')
-    );
+  it('records environment setup failures instead of aborting the suite', async () => {
+    const reportRoot = await temporaryRoot('setup');
     const factory: SystemUnderTestFactory = {
+      name: 'failing-setup',
+      evidenceSource: 'test-observer',
       create: () => Promise.reject(new Error('authentication failed')),
     };
 
@@ -107,20 +142,89 @@ describe('run suite boundaries', () => {
         k: 1,
         concurrency: 1,
         thresholds,
-        reportDirectory,
+        reportRoot,
       });
 
       expect(result.records[0]?.error).toBe('authentication failed');
       expect(result.records[0]?.passed).toBe(false);
     } finally {
-      await rm(reportDirectory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 
-  it('retains run evidence and deterministic grades when the judge fails', async () => {
-    const reportDirectory = await mkdtemp(
-      join(tmpdir(), 'eval-pyramid-judge-failure-')
-    );
+  it('measures latency and obtains outcome and tools from the observer', async () => {
+    const reportRoot = await temporaryRoot('observation');
+    const factory = factoryFor({
+      system: {
+        run: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return successfulRun();
+        },
+      },
+      observer: {
+        observe: () =>
+          Promise.resolve({
+            outcome: { stored: true },
+            toolCalls: [{ name: 'persist', arguments: { value: true } }],
+            source: 'independent-test-store',
+          }),
+      },
+    });
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportRoot,
+        runId: 'observed-run',
+      });
+      const run = result.records[0]?.run;
+
+      expect(run?.outcome).toEqual({ stored: true });
+      expect(run?.toolCalls[0]?.name).toBe('persist');
+      expect(run?.metrics.latencyMs).toBeGreaterThanOrEqual(4);
+      expect(run?.metrics.latencySource).toBe('harness-wall-clock');
+      expect(result.summary.independentEvidenceRate).toBe(1);
+    } finally {
+      await rm(reportRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains system output and fails closed when observation fails', async () => {
+    const reportRoot = await temporaryRoot('observer-failure');
+    const factory = factoryFor({
+      system: { run: () => Promise.resolve(successfulRun()) },
+      observer: {
+        observe: () => Promise.reject(new Error('database unavailable')),
+      },
+    });
+
+    try {
+      const result = await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportRoot,
+      });
+
+      expect(result.records[0]?.run.output).toEqual({ status: 'complete' });
+      expect(result.records[0]?.run.evidenceSource).toBe('unavailable');
+      expect(result.records[0]?.passed).toBe(false);
+      expect(result.records[0]?.grades[0]?.grader).toBe('evidence:runtime');
+    } finally {
+      await rm(reportRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains deterministic evidence when the judge fails', async () => {
+    const reportRoot = await temporaryRoot('judge-failure');
     const judgedTask: EvalTask = {
       ...task,
       rubric: [
@@ -143,8 +247,8 @@ describe('run suite boundaries', () => {
         trials: 1,
         k: 1,
         concurrency: 1,
-        thresholds,
-        reportDirectory,
+        thresholds: { ...thresholds, requireJudge: true },
+        reportRoot,
         judgeProvider,
       });
       const record = result.records[0];
@@ -158,24 +262,24 @@ describe('run suite boundaries', () => {
       ]);
       expect(record?.error).toBe('judge unavailable');
     } finally {
-      await rm(reportDirectory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 
-  it('removes the workspace even when system disposal fails', async () => {
-    const reportDirectory = await mkdtemp(
-      join(tmpdir(), 'eval-pyramid-cleanup-')
-    );
+  it('removes the workspace even when environment disposal fails', async () => {
+    const reportRoot = await temporaryRoot('cleanup');
     let trialWorkspace = '';
     const factory: SystemUnderTestFactory = {
-      create: () =>
-        Promise.resolve({
-          run: (_task, context) => {
-            trialWorkspace = context.workspace;
-            return Promise.resolve(successfulRun());
-          },
+      name: 'cleanup-test',
+      evidenceSource: 'test-observer',
+      create: (context) => {
+        trialWorkspace = context.workspace;
+        return Promise.resolve({
+          system: { run: () => Promise.resolve(successfulRun()) },
+          observer: { observe: () => Promise.resolve(observed()) },
           dispose: () => Promise.reject(new Error('close failed')),
-        }),
+        });
+      },
     };
 
     try {
@@ -186,39 +290,51 @@ describe('run suite boundaries', () => {
         k: 1,
         concurrency: 1,
         thresholds,
-        reportDirectory,
+        reportRoot,
       });
 
       expect(result.records[0]?.passed).toBe(false);
-      expect(result.records[0]?.error).toContain('System disposal failed');
+      expect(result.records[0]?.error).toContain('Environment disposal failed');
       await expect(access(trialWorkspace)).rejects.toThrow();
     } finally {
-      await rm(reportDirectory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 });
 
 function successfulFactory(): SystemUnderTestFactory {
+  return factoryFor({
+    system: { run: () => Promise.resolve(successfulRun()) },
+    observer: { observe: () => Promise.resolve(observed()) },
+  });
+}
+
+function factoryFor(environment: TrialEnvironment): SystemUnderTestFactory {
   return {
-    create: () =>
-      Promise.resolve({
-        run: () => Promise.resolve(successfulRun()),
-      }),
+    name: 'test-system',
+    evidenceSource: 'test-observer',
+    create: () => Promise.resolve(environment),
   };
 }
 
-function successfulRun(): AgentRun {
+function successfulRun(): SystemRun {
   return {
     output: { status: 'complete' },
-    outcome: {},
     transcript: [],
-    toolCalls: [],
     metrics: {
-      latencyMs: 1,
       inputTokens: 1,
       outputTokens: 1,
       costUsd: 0,
       turns: 1,
+      usageSource: 'test-provider',
     },
   };
+}
+
+function observed(): ObservedEvidence {
+  return { outcome: {}, toolCalls: [], source: 'test-observer' };
+}
+
+function temporaryRoot(label: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), `eval-pyramid-${label}-`));
 }

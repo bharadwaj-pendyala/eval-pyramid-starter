@@ -49,14 +49,7 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
     );
   }
   if (task.expected.maxCostUsd !== undefined) {
-    grades.push(
-      limitGrade(
-        'cost-budget',
-        run.metrics.costUsd,
-        task.expected.maxCostUsd,
-        'USD'
-      )
-    );
+    grades.push(usageLimitGrade(run.metrics.costUsd, task.expected.maxCostUsd));
   }
   if (task.expected.maxLatencyMs !== undefined) {
     grades.push(
@@ -70,6 +63,19 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
   }
 
   return grades;
+}
+
+function usageLimitGrade(actual: number | null, limit: number): Grade {
+  if (actual === null) {
+    return {
+      grader: 'cost-budget',
+      score: 0,
+      passed: false,
+      rationale:
+        'Cost usage was not reported by the provider, so the budget cannot be verified.',
+    };
+  }
+  return limitGrade('cost-budget', actual, limit, 'USD');
 }
 
 function gradeSchema(
@@ -104,23 +110,33 @@ function gradeTools(
   required: ToolExpectation[],
   forbidden: string[]
 ): Grade {
-  const missing = required.filter(
-    (expected) => !calls.some((call) => toolMatches(call, expected))
-  );
+  const unmatched = unmatchedInOrder(calls, required);
   const forbiddenCalls = calls.filter((call) => forbidden.includes(call.name));
-  const passed = missing.length === 0 && forbiddenCalls.length === 0;
+  const passed = unmatched.length === 0 && forbiddenCalls.length === 0;
 
   const problems = [
-    ...missing.map((item) => `missing ${item.name}`),
-    ...forbiddenCalls.map((item) => `forbidden ${item.name}`),
+    ...unmatched.map((item) => `${item.name} missing or out of order`),
+    ...forbiddenCalls.map((item) => `${item.name} forbidden`),
   ];
 
   return binaryGrade(
     'tool-policy',
     passed,
-    'Required tools were called and forbidden tools were avoided.',
+    'Required tools were called in order and forbidden tools were avoided.',
     `Tool policy failed: ${problems.join(', ')}.`
   );
+}
+
+function unmatchedInOrder(
+  calls: ToolCall[],
+  required: ToolExpectation[]
+): ToolExpectation[] {
+  let matched = 0;
+  for (const call of calls) {
+    const next = required[matched];
+    if (next && toolMatches(call, next)) matched += 1;
+  }
+  return required.slice(matched);
 }
 
 function toolMatches(call: ToolCall, expected: ToolExpectation): boolean {

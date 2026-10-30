@@ -3,10 +3,10 @@ import type {
   JudgeRequest,
   JudgeScore,
   JsonValue,
-} from '../types.js';
+} from '../../src/types.js';
 
-export class FakeJudgeProvider implements JudgeProvider {
-  readonly name = 'fake-signal-judge';
+export class SignalMatcherTestDouble implements JudgeProvider {
+  readonly name = 'test-only-signal-matcher';
 
   score(request: JudgeRequest): Promise<JudgeScore> {
     const signals = request.criterion.requiredSignals ?? [];
@@ -14,8 +14,7 @@ export class FakeJudgeProvider implements JudgeProvider {
       return Promise.resolve({
         score: 0,
         confidence: 0,
-        rationale:
-          'The offline judge needs requiredSignals for this criterion.',
+        rationale: 'The test double needs requiredSignals for this criterion.',
         unknown: true,
       });
     }

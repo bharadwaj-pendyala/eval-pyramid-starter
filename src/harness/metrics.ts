@@ -2,6 +2,7 @@ import type {
   EvalSummary,
   ReleaseGate,
   ReleaseThresholds,
+  RunProvenance,
   TaskReliability,
   TrialRecord,
 } from '../types.js';
@@ -24,7 +25,8 @@ export function computeReliabilitySummary(
   records: TrialRecord[],
   k: number,
   runId: string,
-  thresholds: ReleaseThresholds
+  thresholds: ReleaseThresholds,
+  provenance: RunProvenance = unknownProvenance()
 ): EvalSummary {
   if (records.length === 0)
     throw new Error('Cannot summarize an empty eval run.');
@@ -45,6 +47,7 @@ export function computeReliabilitySummary(
         throw new Error(`k=${k} exceeds ${trials} trials for task ${taskId}.`);
       return {
         taskId,
+        severity: taskRecords[0]?.severity ?? 'medium',
         successes,
         trials,
         passAt1: successes / trials,
@@ -63,6 +66,17 @@ export function computeReliabilitySummary(
     judgeGrades.length > 0
       ? average(judgeGrades.map((grade) => grade.score))
       : null;
+  const independentEvidenceRate =
+    records.filter((record) => isIndependent(record.run.evidenceSource))
+      .length / records.length;
+  const criticalRecords = records.filter(
+    (record) => record.severity === 'critical'
+  );
+  const criticalPassRate =
+    criticalRecords.length === 0
+      ? 1
+      : criticalRecords.filter((record) => record.passed).length /
+        criticalRecords.length;
   const passAt1Average = average(tasks.map((task) => task.passAt1));
   const passAtKAverage = average(tasks.map((task) => task.passAtK));
   const passPowerKAverage = average(tasks.map((task) => task.passPowerK));
@@ -75,6 +89,8 @@ export function computeReliabilitySummary(
     trialCount: records.length,
     deterministicPassRate,
     judgeAverage,
+    independentEvidenceRate,
+    criticalPassRate,
     passAt1: passAt1Average,
     passAtK: passAtKAverage,
     passPowerK: passPowerKAverage,
@@ -84,8 +100,11 @@ export function computeReliabilitySummary(
       passAt1Average,
       passPowerKAverage,
       judgeAverage,
+      independentEvidenceRate,
+      criticalPassRate,
       thresholds
     ),
+    provenance,
   };
 }
 
@@ -94,6 +113,8 @@ function buildReleaseGate(
   passAt1Value: number,
   passPowerKValue: number,
   judgeAverage: number | null,
+  independentEvidenceRate: number,
+  criticalPassRate: number,
   thresholds: ReleaseThresholds
 ): ReleaseGate {
   const checks: ReleaseGate['checks'] = [
@@ -104,10 +125,20 @@ function buildReleaseGate(
     ),
     thresholdCheck('pass@1', passAt1Value, thresholds.passAt1),
     thresholdCheck('pass^k', passPowerKValue, thresholds.passPowerK),
+    thresholdCheck(
+      'critical task pass rate',
+      criticalPassRate,
+      thresholds.criticalPassRate
+    ),
   ];
-  if (judgeAverage !== null) {
+  if (thresholds.requireJudge || judgeAverage !== null) {
     checks.push(
       thresholdCheck('judge average', judgeAverage, thresholds.judgeAverage)
+    );
+  }
+  if (thresholds.requireIndependentEvidence) {
+    checks.push(
+      thresholdCheck('independent evidence', independentEvidenceRate, 1)
     );
   }
   return { passed: checks.every((check) => check.passed), checks };
@@ -115,10 +146,19 @@ function buildReleaseGate(
 
 function thresholdCheck(
   name: string,
-  actual: number,
+  actual: number | null,
   required: number
 ): ReleaseGate['checks'][number] {
-  return { name, actual, required, passed: actual >= required };
+  return {
+    name,
+    actual,
+    required,
+    passed: actual !== null && actual >= required,
+  };
+}
+
+function isIndependent(source: string): boolean {
+  return source !== 'unavailable' && !source.startsWith('self-reported');
 }
 
 function combination(n: number, k: number): number {
@@ -155,4 +195,16 @@ function validateCounts(successes: number, trials: number, k: number): void {
 
 function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function unknownProvenance(): RunProvenance {
+  return {
+    systemUnderTest: 'not-provided',
+    evidenceObserver: 'not-provided',
+    judge: null,
+    taskFile: 'not-provided',
+    taskSetSha256: 'not-provided',
+    sourceRevision: null,
+    configuration: {},
+  };
 }

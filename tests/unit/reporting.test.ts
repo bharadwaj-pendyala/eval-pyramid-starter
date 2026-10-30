@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,7 +6,11 @@ import { describe, expect, it } from 'vitest';
 
 import { escapeHtml } from '../../src/harness/write-reports.js';
 import { redactUnknown } from '../../src/reporting/redact.js';
-import { summarizeReviewQueue } from '../../src/reporting/review-queue.js';
+import {
+  adjudicateReview,
+  exportReviewDecisions,
+  summarizeReviewQueue,
+} from '../../src/reporting/review-queue.js';
 
 describe('report safety', () => {
   it('redacts sensitive values recursively', () => {
@@ -17,13 +21,13 @@ describe('report safety', () => {
           authorization: 'Bearer secret',
           safe: 'Contact person@example.com',
         },
-        metrics: { inputTokens: 180, outputTokens: 72 },
+        metrics: { inputTokens: 5, outputTokens: 2 },
         rows: [{ apiKey: 'secret-key' }],
       })
     ).toEqual({
       email: '[REDACTED]',
       nested: { authorization: '[REDACTED]', safe: 'Contact [REDACTED_EMAIL]' },
-      metrics: { inputTokens: 180, outputTokens: 72 },
+      metrics: { inputTokens: 5, outputTokens: 2 },
       rows: [{ apiKey: '[REDACTED]' }],
     });
   });
@@ -34,22 +38,36 @@ describe('report safety', () => {
     );
   });
 
-  it('summarizes singular and plural human review queues', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'eval-pyramid-review-'));
+  it('lists, adjudicates, and exports human review decisions durably', async () => {
+    const reportRoot = await mkdtemp(join(tmpdir(), 'eval-pyramid-review-'));
 
     try {
-      const path = join(directory, 'review-queue.jsonl');
-      await writeFile(path, '{"taskId":"one"}\n', 'utf8');
-      await expect(summarizeReviewQueue(directory)).resolves.toContain(
-        '1 trial waiting for human review'
+      const latest = join(reportRoot, 'latest');
+      await mkdir(latest);
+      await writeFile(
+        join(latest, 'summary.json'),
+        '{"runId":"review-run"}\n',
+        'utf8'
       );
-
-      await writeFile(path, '{"taskId":"one"}\n{"taskId":"two"}\n', 'utf8');
-      await expect(summarizeReviewQueue(directory)).resolves.toContain(
+      await writeFile(
+        join(latest, 'review-queue.jsonl'),
+        '{"runId":"review-run","taskId":"one","trialIndex":0,"reasons":["failed"],"output":"a"}\n{"runId":"review-run","taskId":"two","trialIndex":1,"reasons":["unknown"],"output":"b"}\n',
+        'utf8'
+      );
+      await expect(summarizeReviewQueue(reportRoot)).resolves.toContain(
         '2 trials waiting for human review'
       );
+
+      await adjudicateReview(reportRoot, 'one', 0, 0.25, 'Unsafe action.');
+      await expect(summarizeReviewQueue(reportRoot)).resolves.toContain(
+        '1 trial waiting for human review'
+      );
+      const exportPath = await exportReviewDecisions(reportRoot);
+      const exported = await readFile(exportPath, 'utf8');
+      expect(exported).toContain('"humanScore":0.25');
+      expect(exported).toContain('Unsafe action.');
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      await rm(reportRoot, { recursive: true, force: true });
     }
   });
 });

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 import type {
   AgentRun,
@@ -13,8 +14,10 @@ export async function calibrateJudge(
   goldenSetFile = 'evals/judge-golden-set.jsonl',
   tolerance = 0.25
 ): Promise<CalibrationSummary> {
-  const examples = await loadGoldenSet(goldenSetFile);
+  const contents = await readFile(goldenSetFile, 'utf8');
+  const examples = loadGoldenSet(contents, goldenSetFile);
   const differences: number[] = [];
+  let abstentions = 0;
 
   for (const example of examples) {
     const task = calibrationTask(example);
@@ -24,7 +27,11 @@ export async function calibrateJudge(
       run,
       criterion: example.criterion,
     });
-    differences.push(Math.abs(result.score - example.humanScore));
+    // An abstention is not agreement, so it counts as the largest possible error.
+    if (result.unknown) abstentions += 1;
+    differences.push(
+      result.unknown ? 1 : Math.abs(result.score - example.humanScore)
+    );
   }
 
   const meanAbsoluteError = average(differences);
@@ -35,15 +42,21 @@ export async function calibrateJudge(
   return {
     provider: provider.name,
     examples: examples.length,
+    abstentions,
     meanAbsoluteError,
     agreementWithinTolerance,
     tolerance,
+    goldenSetFile,
+    goldenSetSha256: createHash('sha256').update(contents).digest('hex'),
+    calibratedAt: new Date().toISOString(),
     passed: meanAbsoluteError <= tolerance && agreementWithinTolerance >= 0.8,
   };
 }
 
-async function loadGoldenSet(filePath: string): Promise<GoldenJudgeExample[]> {
-  const contents = await readFile(filePath, 'utf8');
+function loadGoldenSet(
+  contents: string,
+  filePath: string
+): GoldenJudgeExample[] {
   const lines = contents
     .split(/\r?\n/u)
     .map((line) => line.trim())
@@ -86,6 +99,7 @@ function calibrationTask(example: GoldenJudgeExample): EvalTask {
   return {
     id: example.id,
     description: 'Judge calibration example with a trusted human score.',
+    severity: 'medium',
     input: { customerId: 'calibration', message: 'Calibration input' },
     expected: { maxTurns: 1 },
     rubric: [example.criterion],
@@ -98,12 +112,15 @@ function calibrationRun(output: string): AgentRun {
     outcome: {},
     transcript: [{ role: 'assistant', content: output }],
     toolCalls: [],
+    evidenceSource: 'calibration-fixture',
     metrics: {
       latencyMs: 0,
       inputTokens: 0,
       outputTokens: 0,
       costUsd: 0,
       turns: 1,
+      latencySource: 'harness-wall-clock',
+      usageSource: 'calibration-fixture',
     },
   };
 }

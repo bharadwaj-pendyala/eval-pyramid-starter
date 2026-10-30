@@ -7,7 +7,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       include: ['src/**/*.ts'],
-      exclude: ['src/cli.ts', 'src/adapters/openai-judge.ts'],
+      exclude: ['src/cli.ts'],
       thresholds: {
         branches: 80,
         functions: 85,
