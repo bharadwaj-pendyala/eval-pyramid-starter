@@ -21,10 +21,13 @@ const contentTypes = {
 };
 
 const server = createServer(async (request, response) => {
-  const rawPath = new URL(
-    request.url ?? '/',
-    `http://${request.headers.host ?? 'localhost'}`
-  ).pathname;
+  let rawPath;
+  try {
+    rawPath = new URL(request.url ?? '/', 'http://localhost').pathname;
+  } catch {
+    response.writeHead(400).end('Bad request');
+    return;
+  }
   const relativePath =
     rawPath === '/' ? 'index.html' : normalize(rawPath).replace(/^[/\\]+/u, '');
   const filePath = resolve(join(root, relativePath));
@@ -49,7 +52,10 @@ const server = createServer(async (request, response) => {
       'Content-Security-Policy':
         "default-src 'none'; style-src 'unsafe-inline'",
     });
-    createReadStream(filePath).pipe(response);
+    // A new run can replace the file between stat and open.
+    createReadStream(filePath)
+      .on('error', () => response.destroy())
+      .pipe(response);
   } catch {
     response
       .writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })

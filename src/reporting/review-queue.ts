@@ -102,8 +102,9 @@ export async function exportReviewDecisions(
 ): Promise<string> {
   const status = await reviewQueueStatus(reportRoot);
   const decisions = await readDecisions(status.decisionsFile);
+  // Read the immutable run copy, because `latest` may already point at a newer run.
   const queue = await readQueue(
-    join(reportRoot, 'latest', 'review-queue.jsonl')
+    join(reportRoot, 'runs', status.runId, 'review-queue.jsonl')
   );
   const byKey = new Map(queue.map((entry) => [decisionKey(entry), entry]));
   const rows = decisions.map((decision) => {

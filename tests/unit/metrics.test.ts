@@ -30,6 +30,12 @@ describe('reliability estimators', () => {
     expect(passPowerK(0, 10, 3)).toBe(0);
   });
 
+  it('stays finite where binomial coefficients overflow', () => {
+    expect(passAtK(0, 2000, 1000)).toBe(0);
+    expect(passPowerK(2000, 2000, 1000)).toBe(1);
+    expect(passAtK(1, 2000, 1000)).toBeCloseTo(0.5, 10);
+  });
+
   it('rejects invalid counts', () => {
     expect(() => passAtK(11, 10, 3)).toThrow('Invalid reliability counts');
     expect(() => passPowerK(5, 10, 11)).toThrow('Invalid reliability counts');

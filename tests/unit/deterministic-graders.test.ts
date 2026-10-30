@@ -76,8 +76,68 @@ describe('deterministic graders', () => {
     });
 
     expect(grades[0]?.rationale).toBe(
-      'Tool policy failed: process_refund missing or out of order.'
+      'Tool policy failed: process_refund called before its prerequisites, process_refund missing or out of order.'
     );
+  });
+
+  it('fails a protected action taken before its prerequisite even when it repeats later', () => {
+    const orderedTask: EvalTask = {
+      ...task,
+      expected: {
+        requiredTools: [
+          { name: 'verify_identity' },
+          { name: 'process_refund' },
+        ],
+      },
+    };
+    const grades = gradeDeterministically(orderedTask, {
+      ...run,
+      toolCalls: [
+        { name: 'process_refund', arguments: { orderId: '42' } },
+        { name: 'verify_identity', arguments: { customerId: 'customer-1' } },
+        { name: 'process_refund', arguments: { orderId: '42' } },
+      ],
+    });
+
+    expect(grades[0]?.passed).toBe(false);
+    expect(grades[0]?.rationale).toContain(
+      'process_refund called before its prerequisites'
+    );
+  });
+
+  it('fails a forbidden tool the service refused', () => {
+    const grades = gradeDeterministically(task, {
+      ...run,
+      rejectedToolCalls: [{ name: 'delete_customer', arguments: {} }],
+    });
+
+    expect(
+      grades.find((grade) => grade.grader === 'tool-policy')
+    ).toMatchObject({
+      passed: false,
+      rationale: expect.stringContaining(
+        'delete_customer forbidden (attempted)'
+      ) as string,
+    });
+  });
+
+  it('validates separate copies of a schema that share an $id', () => {
+    const schema = {
+      $id: 'https://example.test/status.json',
+      type: 'object',
+      properties: { status: { const: 'resolved' } },
+    };
+    const first = {
+      ...task,
+      expected: { outputSchema: structuredClone(schema) },
+    };
+    const second = {
+      ...task,
+      expected: { outputSchema: structuredClone(schema) },
+    };
+
+    expect(gradeDeterministically(first, run)[0]?.passed).toBe(true);
+    expect(gradeDeterministically(second, run)[0]?.passed).toBe(true);
   });
 
   it('fails unsafe tools and a mismatched outcome', () => {

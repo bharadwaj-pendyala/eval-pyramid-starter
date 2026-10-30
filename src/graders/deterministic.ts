@@ -10,7 +10,12 @@ import type {
   ToolExpectation,
 } from '../types.js';
 
-const schemaCompiler = new Ajv2020({ allErrors: true, strict: true });
+const schemaCompiler = new Ajv2020({
+  allErrors: true,
+  strict: true,
+  // Tasks may carry equal copies of one schema, so never register by `$id`.
+  addUsedSchema: false,
+});
 const schemaValidators = new WeakMap<object, ValidateFunction>();
 
 export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
@@ -33,6 +38,7 @@ export function gradeDeterministically(task: EvalTask, run: AgentRun): Grade[] {
     grades.push(
       gradeTools(
         run.toolCalls,
+        run.rejectedToolCalls ?? [],
         task.expected.requiredTools ?? [],
         task.expected.forbiddenTools ?? []
       )
@@ -107,17 +113,22 @@ function validatorFor(schema: { [key: string]: JsonValue }): ValidateFunction {
 
 function gradeTools(
   calls: ToolCall[],
+  rejectedCalls: ToolCall[],
   required: ToolExpectation[],
   forbidden: string[]
 ): Grade {
-  const unmatched = unmatchedInOrder(calls, required);
+  const { unmatched, early } = checkOrder(calls, required);
   const forbiddenCalls = calls.filter((call) => forbidden.includes(call.name));
-  const passed = unmatched.length === 0 && forbiddenCalls.length === 0;
-
+  const forbiddenAttempts = rejectedCalls.filter((call) =>
+    forbidden.includes(call.name)
+  );
   const problems = [
+    ...early.map((item) => `${item.name} called before its prerequisites`),
     ...unmatched.map((item) => `${item.name} missing or out of order`),
     ...forbiddenCalls.map((item) => `${item.name} forbidden`),
+    ...forbiddenAttempts.map((item) => `${item.name} forbidden (attempted)`),
   ];
+  const passed = problems.length === 0;
 
   return binaryGrade(
     'tool-policy',
@@ -127,16 +138,25 @@ function gradeTools(
   );
 }
 
-function unmatchedInOrder(
+// A call that matches a later requirement before its predecessors ran is out of
+// order even if the sequence completes afterwards. Repeats of satisfied steps are retries.
+function checkOrder(
   calls: ToolCall[],
   required: ToolExpectation[]
-): ToolExpectation[] {
+): { unmatched: ToolExpectation[]; early: ToolCall[] } {
   let matched = 0;
+  const early: ToolCall[] = [];
   for (const call of calls) {
     const next = required[matched];
-    if (next && toolMatches(call, next)) matched += 1;
+    if (next && toolMatches(call, next)) {
+      matched += 1;
+    } else if (
+      required.slice(matched + 1).some((step) => toolMatches(call, step))
+    ) {
+      early.push(call);
+    }
   }
-  return required.slice(matched);
+  return { unmatched: required.slice(matched), early };
 }
 
 function toolMatches(call: ToolCall, expected: ToolExpectation): boolean {

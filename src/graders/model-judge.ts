@@ -12,7 +12,8 @@ export async function gradeWithJudge(
     const passed = !result.unknown && result.score >= criterion.minimumScore;
     grades.push({
       grader: `judge:${criterion.id}`,
-      score: result.score,
+      // An abstention earns no credit toward the judge average.
+      score: result.unknown ? 0 : result.score,
       passed,
       rationale: result.unknown
         ? `Unknown: ${result.rationale}`

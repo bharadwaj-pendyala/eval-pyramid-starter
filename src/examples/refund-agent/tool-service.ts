@@ -20,6 +20,7 @@ interface RefundRecord {
 interface RefundToolState {
   verifiedCustomerId: string | null;
   calls: ToolCall[];
+  rejectedCalls: ToolCall[];
   refunds: RefundRecord[];
   confirmations: Array<{ channel: 'email' }>;
   escalations: Array<{ reason: EscalationReason }>;
@@ -80,6 +81,7 @@ export class RefundToolService {
     this.#state = {
       verifiedCustomerId: null,
       calls: [],
+      rejectedCalls: [],
       refunds: [],
       confirmations: [],
       escalations: [],
@@ -106,7 +108,12 @@ export class RefundToolService {
       options.transientRefundFailures ?? 0
     );
     holder.current = service;
-    await service.#persist();
+    try {
+      await service.#persist();
+    } catch (error) {
+      await service.close().catch(() => undefined);
+      throw error;
+    }
     return service;
   }
 
@@ -132,21 +139,26 @@ export class RefundToolService {
     return {
       outcome,
       toolCalls: structuredClone(this.#state.calls),
+      rejectedToolCalls: structuredClone(this.#state.rejectedCalls),
       source: 'refund-tool-service:persisted-state',
     };
   }
 
   async close(): Promise<void> {
-    await this.#writeSequence;
-    await new Promise<void>((resolve, reject) => {
-      this.#server.close((error) => (error ? reject(error) : resolve()));
-    });
+    try {
+      await this.#writeSequence;
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        this.#server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   }
 
   async #handle(
     request: IncomingMessage,
     response: ServerResponse
   ): Promise<void> {
+    let attempt: ToolCall | undefined;
     try {
       const url = new URL(request.url ?? '/', this.baseUrl);
       if (request.method === 'GET' && url.pathname === '/health') {
@@ -160,6 +172,7 @@ export class RefundToolService {
       if (request.method === 'POST' && url.pathname === '/identity/verify') {
         const body = await jsonBody(request);
         const customerId = requiredString(body, 'customerId');
+        attempt = { name: 'verify_identity', arguments: { customerId } };
         if (!customerId.startsWith('customer-')) {
           throw new HttpError(403, 'Identity verification failed.');
         }
@@ -171,6 +184,7 @@ export class RefundToolService {
       const orderMatch = /^\/orders\/([^/]+)$/u.exec(url.pathname);
       if (request.method === 'GET' && orderMatch) {
         const orderId = decodeURIComponent(orderMatch[1] ?? '');
+        attempt = { name: 'fetch_order', arguments: { orderId } };
         const order = this.#orders[orderId];
         if (!order) throw new HttpError(404, `Order ${orderId} was not found.`);
         await this.#record('fetch_order', { orderId });
@@ -191,6 +205,7 @@ export class RefundToolService {
         const body = await jsonBody(request);
         const orderId = requiredString(body, 'orderId');
         const amount = requiredPositiveNumber(body, 'amount');
+        attempt = { name: 'process_refund', arguments: { orderId, amount } };
         const order = this.#orders[orderId];
         if (!order) throw new HttpError(404, `Order ${orderId} was not found.`);
         if (this.#state.verifiedCustomerId !== order.customerId) {
@@ -217,6 +232,7 @@ export class RefundToolService {
       if (request.method === 'POST' && url.pathname === '/confirmations') {
         const body = await jsonBody(request);
         const channel = requiredString(body, 'channel');
+        attempt = { name: 'send_confirmation', arguments: { channel } };
         if (channel !== 'email') {
           throw new HttpError(400, 'Unsupported confirmation channel.');
         }
@@ -234,6 +250,7 @@ export class RefundToolService {
       if (request.method === 'POST' && url.pathname === '/escalations') {
         const body = await jsonBody(request);
         const reason = requiredString(body, 'reason');
+        attempt = { name: 'escalate_to_human', arguments: { reason } };
         if (!isEscalationReason(reason)) {
           throw new HttpError(400, 'Unsupported escalation reason.');
         }
@@ -258,6 +275,10 @@ export class RefundToolService {
       }
       throw new HttpError(404, 'Not found.');
     } catch (error) {
+      if (attempt && error instanceof HttpError) {
+        this.#state.rejectedCalls.push(attempt);
+        await this.#persist().catch(() => undefined);
+      }
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof Error ? error.message : 'Unknown error';
       json(response, status, { error: message });

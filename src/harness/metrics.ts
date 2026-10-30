@@ -9,7 +9,13 @@ import type {
 
 export function passAtK(successes: number, trials: number, k: number): number {
   validateCounts(successes, trials, k);
-  return 1 - combination(trials - successes, k) / combination(trials, k);
+  if (trials - successes < k) return 1;
+  // Products of ratios stay finite where the binomial coefficients overflow.
+  let allFail = 1;
+  for (let index = trials - successes + 1; index <= trials; index += 1) {
+    allFail *= 1 - k / index;
+  }
+  return 1 - allFail;
 }
 
 export function passPowerK(
@@ -18,7 +24,11 @@ export function passPowerK(
   k: number
 ): number {
   validateCounts(successes, trials, k);
-  return combination(successes, k) / combination(trials, k);
+  let allPass = 1;
+  for (let index = 0; index < k; index += 1) {
+    allPass *= (successes - index) / (trials - index);
+  }
+  return Math.max(0, allPass);
 }
 
 export function computeReliabilitySummary(
@@ -159,17 +169,6 @@ function thresholdCheck(
 
 function isIndependent(source: string): boolean {
   return source !== 'unavailable' && !source.startsWith('self-reported');
-}
-
-function combination(n: number, k: number): number {
-  if (k < 0 || n < k) return 0;
-  if (k === 0 || n === k) return 1;
-  const smallerK = Math.min(k, n - k);
-  let value = 1;
-  for (let index = 1; index <= smallerK; index += 1) {
-    value = (value * (n - smallerK + index)) / index;
-  }
-  return value;
 }
 
 function validateCounts(successes: number, trials: number, k: number): void {

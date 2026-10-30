@@ -86,6 +86,7 @@ export class RefundApplicationServer {
       }
       const trialContext: TrialContext = {
         runId: context.runId,
+        trialId: context.trialId,
         trialIndex: context.trialIndex,
         workspace: this.#workspace,
       };
@@ -105,10 +106,11 @@ function isTaskInput(value: unknown): value is TaskInput {
 
 function isRemoteContext(
   value: unknown
-): value is { runId: string; trialIndex: number } {
+): value is { runId: string; trialId: string; trialIndex: number } {
   return (
     isRecord(value) &&
     typeof value['runId'] === 'string' &&
+    typeof value['trialId'] === 'string' &&
     Number.isInteger(value['trialIndex']) &&
     typeof value['trialIndex'] === 'number' &&
     value['trialIndex'] >= 0
