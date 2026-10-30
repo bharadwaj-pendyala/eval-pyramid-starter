@@ -177,8 +177,8 @@ function checkOrder(
   const early: ToolCall[] = [];
   for (const { call, rejected } of attempts) {
     const next = required[matched];
-    if (!rejected && next && toolMatches(call, next)) {
-      matched += 1;
+    if (next && toolMatches(call, next)) {
+      if (!rejected) matched += 1;
     } else if (
       required.slice(matched + 1).some((step) => toolMatches(call, step))
     ) {
