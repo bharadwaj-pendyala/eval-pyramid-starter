@@ -174,6 +174,27 @@ describe('deterministic graders', () => {
     expect(grades[0]?.passed).toBe(true);
   });
 
+  it('passes a refused attempt at a step that repeats later', () => {
+    const repeatedTask: EvalTask = {
+      ...task,
+      expected: {
+        requiredTools: [{ name: 'fetch_order' }, { name: 'fetch_order' }],
+      },
+    };
+    const grades = gradeDeterministically(repeatedTask, {
+      ...run,
+      toolCalls: [
+        { name: 'fetch_order', arguments: { orderId: '42' } },
+        { name: 'fetch_order', arguments: { orderId: '42' } },
+      ],
+      rejectedToolCalls: [
+        { name: 'fetch_order', arguments: { orderId: '42' }, position: 0 },
+      ],
+    });
+
+    expect(grades[0]?.passed).toBe(true);
+  });
+
   it('validates separate copies of a schema that share an $id', () => {
     const schema = {
       $id: 'https://example.test/status.json',
