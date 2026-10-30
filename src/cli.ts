@@ -8,6 +8,7 @@ import config from '../eval.config.js';
 import { OpenAIJudgeProvider } from './adapters/openai-judge.js';
 import {
   RefundAgentFactory,
+  type RefundAgentFactoryOptions,
   RemoteEnvironmentFactory,
 } from './examples/refund-agent/environment.js';
 import { calibrateJudge } from './harness/calibrate-judge.js';
@@ -57,7 +58,7 @@ async function runCommand(args: string[]): Promise<void> {
   const sutMode = stringFlag(args, '--sut', 'example');
   const judgeProvider = createJudge(judgeMode);
   if (judgeProvider) await requireCurrentCalibration(judgeProvider);
-  const factory = createSystemFactory(sutMode);
+  const factory = createSystemFactory(sutMode, args);
   const tasks = await loadTasks(config.taskFile);
   const thresholds = judgeProvider ? config.liveThresholds : config.thresholds;
   const provenance = await buildProvenance(
@@ -145,8 +146,27 @@ function createJudge(mode: string): JudgeProvider | undefined {
   throw new Error(`Unsupported judge mode: ${mode}. Use none or openai.`);
 }
 
-function createSystemFactory(mode: string): SystemUnderTestFactory {
-  if (mode === 'example') return new RefundAgentFactory();
+function exampleOptions(args: string[]): RefundAgentFactoryOptions {
+  const fault = stringFlag(args, '--tool-fault', '');
+  const regression = stringFlag(args, '--regression', '');
+  const faultMatch = /^transient-refund-every=(\d+)$/u.exec(fault);
+  if (fault && !faultMatch) {
+    throw new Error('Use --tool-fault transient-refund-every=N.');
+  }
+  if (regression && regression !== 'swallow-refund-errors') {
+    throw new Error('Use --regression swallow-refund-errors.');
+  }
+  return {
+    ...(faultMatch ? { transientRefundFaultEvery: Number(faultMatch[1]) } : {}),
+    ...(regression ? { regression: 'swallow-refund-errors' as const } : {}),
+  };
+}
+
+function createSystemFactory(
+  mode: string,
+  args: string[]
+): SystemUnderTestFactory {
+  if (mode === 'example') return new RefundAgentFactory(exampleOptions(args));
   if (mode === 'http') {
     const systemRunUrl = process.env['EVAL_SUT_RUN_URL'] ?? '';
     const evidenceUrl = process.env['EVAL_EVIDENCE_URL'] ?? '';
@@ -342,6 +362,8 @@ function printHelp(): void {
   console.log(`Usage:
   npm run eval:deterministic
   npm run eval:repeat -- --trials 10 --k 3
+  npm run eval:fault
+  npm run eval:regression
   npm run eval:judge
   npm run eval:live
   npm run eval:review -- list
@@ -350,6 +372,7 @@ function printHelp(): void {
 
 Direct CLI:
   tsx src/cli.ts run [--sut example|http] [--trials N] [--k N]
+    [--tool-fault transient-refund-every=N] [--regression swallow-refund-errors]
                       [--judge none|openai] [--fail-on-gate]
   tsx src/cli.ts calibrate [--judge openai]
   tsx src/cli.ts review [list|adjudicate|export]`);

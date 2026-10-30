@@ -87,11 +87,23 @@ The Java equivalents are Playwright for Java or Selenium for browser behavior, p
 
 ## Real failure paths
 
-The public eval commands do not accept `--failure-every` or any other score-shaping switch. The example's business failures come from real inputs and provider rules. Integration resilience cases use actual malformed HTTP responses, ownership conflicts, unavailable observers, and failed transports.
+The public eval commands have no switch that sets a score. Failures come from real inputs, provider rules, and agent code.
 
-Harness unit tests still use small test doubles to prove cleanup and error handling. Those tests measure the harness itself. They are not presented as model reliability data.
+Two options reproduce the running case from the companion posts:
 
-The local rule-based application should produce 100 percent reliability. Repeated runs are still useful for proving fresh trial environments and report math. Reliability variance becomes meaningful after `eval:live` connects to a stochastic model-backed SUT.
+- `--tool-fault transient-refund-every=N` makes the payment provider return HTTP 503 for the first refund call in every Nth trial. The fault is in the environment. A correct agent retries once and passes, so the fault alone never fails a trial.
+- `--regression swallow-refund-errors` selects an agent build with a real bug. One `try`/`catch` meant for flaky confirmation emails also swallows a failed refund, and the reply still says the refund was processed.
+
+```bash
+npm run eval:fault        # correct agent under the fault: release gate passes
+npm run eval:regression   # regressed agent under the fault: release gate fails
+```
+
+With 4 trials, `eligible-refund` passes 3 of them. Per task, that gives `pass@1` 75%, `pass@3` 100%, and `pass^3` 25%. The aggregate `pass@1` is 91.7% and passes its 80% threshold. The critical gate blocks the release, because one critical trial reported a refund that the ledger never recorded. The run provenance records both options in the system name.
+
+Harness unit tests still use small test doubles to prove cleanup and error handling. Those tests measure the harness itself. They are not model reliability data.
+
+The local rule-based agent is deterministic, so without these options it produces 100% reliability. Reliability variance from a model becomes meaningful after `eval:live` connects a stochastic model-backed system.
 
 ## Grader layers
 

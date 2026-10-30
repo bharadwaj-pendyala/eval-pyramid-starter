@@ -29,6 +29,7 @@ interface RefundToolState {
 export interface RefundToolServiceOptions {
   workspace: string;
   orders?: Record<string, OrderRecord>;
+  transientRefundFailures?: number;
 }
 
 const defaultOrders: Record<string, OrderRecord> = {
@@ -61,15 +62,18 @@ export class RefundToolService {
   readonly #server: Server;
   readonly #orders: Record<string, OrderRecord>;
   readonly #state: RefundToolState;
+  #remainingRefundFailures: number;
   #writeSequence = Promise.resolve();
 
   private constructor(
     server: Server,
     baseUrl: string,
     stateFile: string,
-    orders: Record<string, OrderRecord>
+    orders: Record<string, OrderRecord>,
+    transientRefundFailures: number
   ) {
     this.#server = server;
+    this.#remainingRefundFailures = transientRefundFailures;
     this.baseUrl = baseUrl;
     this.stateFile = stateFile;
     this.#orders = orders;
@@ -98,7 +102,8 @@ export class RefundToolService {
       server,
       `http://127.0.0.1:${address.port}`,
       stateFile,
-      structuredClone(options.orders ?? defaultOrders)
+      structuredClone(options.orders ?? defaultOrders),
+      options.transientRefundFailures ?? 0
     );
     holder.current = service;
     await service.#persist();
@@ -195,6 +200,13 @@ export class RefundToolService {
         }
         if (this.#state.refunds.some((item) => item.orderId === orderId)) {
           throw new HttpError(409, 'Refund already exists.');
+        }
+        if (this.#remainingRefundFailures > 0) {
+          this.#remainingRefundFailures -= 1;
+          throw new HttpError(
+            503,
+            'Payment provider is temporarily unavailable.'
+          );
         }
         this.#state.refunds.push({ orderId, amount, status: 'processed' });
         await this.#record('process_refund', { orderId, amount });

@@ -10,6 +10,25 @@ import { HttpRefundToolGateway } from '../../src/examples/refund-agent/tool-gate
 import { RefundToolService } from '../../src/examples/refund-agent/tool-service.js';
 
 describe('refund tool provider boundary', () => {
+  it('fails the first refund call when a transient provider fault is set', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'refund-tools-fault-'));
+    const service = await RefundToolService.start({
+      workspace,
+      transientRefundFailures: 1,
+    });
+    const gateway = new HttpRefundToolGateway(service.baseUrl);
+
+    try {
+      await gateway.verifyIdentity('customer-100');
+      await expect(gateway.processRefund('42', 49)).rejects.toThrow('HTTP 503');
+      await expect(gateway.processRefund('42', 49)).resolves.toBeUndefined();
+      expect(service.observe().outcome).toMatchObject({ refundCount: 1 });
+    } finally {
+      await service.close();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('crosses a real TCP socket, mutates state, and persists observable evidence', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'refund-tools-'));
     const service = await RefundToolService.start({ workspace });

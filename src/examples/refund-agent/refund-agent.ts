@@ -14,10 +14,20 @@ import {
 } from './domain.js';
 import type { RefundToolGateway } from './tool-gateway.js';
 
+// A deliberate bug for the walkthrough: one try/catch meant for flaky
+// confirmation emails also swallows a failed refund.
+export type RefundRegression = 'swallow-refund-errors';
+
+export interface RefundAgentOptions {
+  regression?: RefundRegression;
+}
+
 export class RefundAgent implements SystemUnderTest {
   readonly #tools: RefundToolGateway;
+  readonly #regression: RefundRegression | undefined;
 
-  constructor(tools: RefundToolGateway) {
+  constructor(tools: RefundToolGateway, options: RefundAgentOptions = {}) {
+    this.#regression = options.regression;
     this.#tools = tools;
   }
 
@@ -70,13 +80,35 @@ export class RefundAgent implements SystemUnderTest {
     amount: number,
     policy: 'duplicate-charge' | 'refund-window'
   ): Promise<SystemRun> {
-    await this.#call(calls, 'process_refund', { amount, orderId });
-    await this.#call(calls, 'send_confirmation', { channel: 'email' });
+    if (this.#regression === 'swallow-refund-errors') {
+      try {
+        await this.#call(calls, 'process_refund', { amount, orderId });
+        await this.#call(calls, 'send_confirmation', { channel: 'email' });
+      } catch {
+        // The regression under test: the reply below still claims success.
+      }
+    } else {
+      await this.#refundWithRetry(calls, orderId, amount);
+      await this.#call(calls, 'send_confirmation', { channel: 'email' });
+    }
     return buildRun(message, calls, {
       message: `Under the ${policy} policy, your $${amount} refund was processed and confirmed.`,
       policyCited: true,
       status: 'resolved',
     });
+  }
+
+  // The provider rejects a second refund for the same order, so one retry cannot pay twice.
+  async #refundWithRetry(
+    calls: ToolCall[],
+    orderId: string,
+    amount: number
+  ): Promise<void> {
+    try {
+      await this.#call(calls, 'process_refund', { amount, orderId });
+    } catch {
+      await this.#call(calls, 'process_refund', { amount, orderId });
+    }
   }
 
   async #escalate(

@@ -68,4 +68,59 @@ describe('real example eval stack', () => {
       await rm(reportRoot, { recursive: true, force: true });
     }
   });
+
+  it('retries a transient refund fault and keeps every trial passing', async () => {
+    const result = await runRefundSuite(
+      new RefundAgentFactory({ transientRefundFaultEvery: 4 })
+    );
+
+    expect(result.summary.releaseGate.passed).toBe(true);
+  });
+
+  it('blocks a regression that reports a refund the ledger never recorded', async () => {
+    const result = await runRefundSuite(
+      new RefundAgentFactory({
+        transientRefundFaultEvery: 4,
+        regression: 'swallow-refund-errors',
+      })
+    );
+    const eligible = result.summary.tasks.find(
+      (task) => task.taskId === 'eligible-refund'
+    );
+    const faulted = result.records.find(
+      (record) => record.taskId === 'eligible-refund' && record.trialIndex === 3
+    );
+
+    expect(eligible).toMatchObject({
+      successes: 3,
+      trials: 4,
+      passAt1: 0.75,
+      passAtK: 1,
+      passPowerK: 0.25,
+    });
+    expect(faulted?.run.output).toMatchObject({ status: 'resolved' });
+    expect(faulted?.run.outcome).toMatchObject({
+      refund: { status: 'not-created' },
+      refundCount: 0,
+    });
+    expect(result.summary.releaseGate.passed).toBe(false);
+  });
 });
+
+async function runRefundSuite(factory: RefundAgentFactory) {
+  const reportRoot = await mkdtemp(join(tmpdir(), 'eval-fault-reports-'));
+  try {
+    return await runSuite({
+      tasks: await loadTasks('evals/tasks.jsonl'),
+      factory,
+      trials: 4,
+      k: 3,
+      concurrency: 4,
+      thresholds,
+      reportRoot,
+      runId: 'fault-test',
+    });
+  } finally {
+    await rm(reportRoot, { recursive: true, force: true });
+  }
+}
