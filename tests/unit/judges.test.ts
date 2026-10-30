@@ -120,6 +120,7 @@ describe('judge providers', () => {
     expect(passing[0]?.passed).toBe(true);
     expect(passing[0]?.rationale).toContain('Confidence 1.00');
     expect(unknown[0]?.passed).toBe(false);
+    expect(unknown[0]?.score).toBe(0);
     expect(unknown[0]?.rationale).toContain('Unknown:');
     const taskWithoutRubric: EvalTask = {
       id: task.id,
@@ -236,6 +237,23 @@ describe('judge providers', () => {
     await expect(provider.score(request())).rejects.toThrow('HTTP 400');
   });
 
+  it('does not retry an authentication failure', async () => {
+    let calls = 0;
+    const provider = new OpenAIJudgeProvider({
+      apiKey: 'test-key',
+      model: 'test-model',
+      maxRetries: 2,
+      retryDelayMs: 0,
+      fetchImpl: () => {
+        calls += 1;
+        return Promise.resolve(new Response('unauthorized', { status: 401 }));
+      },
+    });
+
+    await expect(provider.score(request())).rejects.toThrow('HTTP 401');
+    expect(calls).toBe(1);
+  });
+
   it('retries a transient judge failure and then parses the score', async () => {
     let calls = 0;
     const provider = new OpenAIJudgeProvider({
@@ -288,6 +306,31 @@ describe('judge providers', () => {
       timeoutMs: 1,
       maxRetries: 0,
       fetchImpl: stalledFetch,
+    });
+
+    await expect(provider.score(request())).rejects.toThrow('timed out');
+  });
+
+  it('times out a response whose body never finishes', async () => {
+    const stalledBody: typeof fetch = (_input, init) =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener('abort', () => {
+                controller.error(new DOMException('aborted', 'AbortError'));
+              });
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } }
+        )
+      );
+    const provider = new OpenAIJudgeProvider({
+      apiKey: 'test-key',
+      model: 'test-model',
+      timeoutMs: 5,
+      maxRetries: 0,
+      fetchImpl: stalledBody,
     });
 
     await expect(provider.score(request())).rejects.toThrow('timed out');

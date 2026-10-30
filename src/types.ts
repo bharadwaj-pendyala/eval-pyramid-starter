@@ -63,6 +63,8 @@ export interface SystemRun {
 export interface ObservedEvidence {
   outcome: JsonValue;
   toolCalls: ToolCall[];
+  // Calls the tool service refused. A forbidden tool fails even when it was refused.
+  rejectedToolCalls?: ToolCall[];
   source: string;
 }
 
@@ -81,12 +83,15 @@ export interface AgentRun {
   outcome: JsonValue;
   transcript: TranscriptEvent[];
   toolCalls: ToolCall[];
+  rejectedToolCalls?: ToolCall[];
   evidenceSource: string;
   metrics: TrialMetrics;
 }
 
 export interface TrialContext {
   runId: string;
+  // Unique per task trial. trialIndex repeats across tasks, so remote state keys on this.
+  trialId: string;
   trialIndex: number;
   workspace: string;
 }

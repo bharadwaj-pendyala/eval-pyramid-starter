@@ -34,7 +34,7 @@ export class OpenAIJudgeProvider implements JudgeProvider {
   }
 
   async score(request: JudgeRequest): Promise<JudgeScore> {
-    const response = await this.#request({
+    const payload = await this.#requestJson({
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.#apiKey}`,
@@ -80,7 +80,6 @@ export class OpenAIJudgeProvider implements JudgeProvider {
       }),
     });
 
-    const payload: unknown = await response.json();
     const text = extractOutputText(payload);
     const parsed: unknown = JSON.parse(text);
     if (!isJudgeScore(parsed)) {
@@ -89,37 +88,37 @@ export class OpenAIJudgeProvider implements JudgeProvider {
     return parsed;
   }
 
-  async #request(init: RequestInit): Promise<Response> {
+  // The timeout covers reading the body, and only 429 and 5xx responses retry.
+  async #requestJson(init: RequestInit): Promise<unknown> {
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+      let response: Response;
       try {
-        const response = await this.#fetch(`${this.#baseUrl}/responses`, {
+        response = await this.#fetch(`${this.#baseUrl}/responses`, {
           ...init,
           signal: controller.signal,
         });
-        if (response.ok) return response;
-        const retryable = response.status === 429 || response.status >= 500;
-        if (!retryable || attempt === this.#maxRetries) {
+        if (response.ok) return (await response.json()) as unknown;
+      } catch (error) {
+        if (attempt < this.#maxRetries) continue;
+        if (error instanceof Error && error.name === 'AbortError') {
           throw new Error(
-            `OpenAI judge request failed with HTTP ${response.status}.`
+            `OpenAI judge request timed out after ${this.#timeoutMs} ms.`,
+            { cause: error }
           );
         }
-        await delay(retryDelay(response, this.#retryDelayMs, attempt));
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
-          if (attempt === this.#maxRetries) {
-            throw new Error(
-              `OpenAI judge request timed out after ${this.#timeoutMs} ms.`,
-              { cause: error }
-            );
-          }
-        } else if (attempt === this.#maxRetries) {
-          throw error;
-        }
+        throw error;
       } finally {
         clearTimeout(timeout);
       }
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt === this.#maxRetries) {
+        throw new Error(
+          `OpenAI judge request failed with HTTP ${response.status}.`
+        );
+      }
+      await delay(retryDelay(response, this.#retryDelayMs, attempt));
     }
     throw new Error('OpenAI judge request exhausted retries.');
   }

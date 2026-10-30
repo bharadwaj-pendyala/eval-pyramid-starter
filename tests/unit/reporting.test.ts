@@ -49,11 +49,12 @@ describe('report safety', () => {
         '{"runId":"review-run"}\n',
         'utf8'
       );
-      await writeFile(
-        join(latest, 'review-queue.jsonl'),
-        '{"runId":"review-run","taskId":"one","trialIndex":0,"reasons":["failed"],"output":"a"}\n{"runId":"review-run","taskId":"two","trialIndex":1,"reasons":["unknown"],"output":"b"}\n',
-        'utf8'
-      );
+      const queue =
+        '{"runId":"review-run","taskId":"one","trialIndex":0,"reasons":["failed"],"output":"a"}\n{"runId":"review-run","taskId":"two","trialIndex":1,"reasons":["unknown"],"output":"b"}\n';
+      const runDirectory = join(reportRoot, 'runs', 'review-run');
+      await mkdir(runDirectory, { recursive: true });
+      await writeFile(join(latest, 'review-queue.jsonl'), queue, 'utf8');
+      await writeFile(join(runDirectory, 'review-queue.jsonl'), queue, 'utf8');
       await expect(summarizeReviewQueue(reportRoot)).resolves.toContain(
         '2 trials waiting for human review'
       );
@@ -65,6 +66,7 @@ describe('report safety', () => {
       const exportPath = await exportReviewDecisions(reportRoot);
       const exported = await readFile(exportPath, 'utf8');
       expect(exported).toContain('"humanScore":0.25');
+      expect(exported).toContain('"output":"a"');
       expect(exported).toContain('Unsafe action.');
     } finally {
       await rm(reportRoot, { recursive: true, force: true });

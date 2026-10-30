@@ -30,16 +30,12 @@ Set `EVAL_SUT_RUN_URL` to an endpoint that accepts:
 
 ```json
 {
-  "task": {
-    "id": "...",
-    "description": "...",
-    "severity": "...",
-    "input": {},
-    "expected": {}
-  },
-  "context": { "runId": "...", "trialIndex": 0 }
+  "input": { "customerId": "customer-100", "message": "..." },
+  "context": { "runId": "...", "trialId": "...", "trialIndex": 0 }
 }
 ```
+
+The request carries only the task input. The application never sees `expected` or `rubric`, so it cannot copy the answer key. Key any per-trial state on `trialId`, because `trialIndex` repeats across tasks.
 
 Return only application-owned evidence:
 
@@ -66,7 +62,7 @@ The harness measures wall-clock latency around this request. An application-prov
 
 ## 3. Implement the evidence endpoint
 
-Set `EVAL_EVIDENCE_URL` to a separately controlled endpoint. The harness calls it with `taskId`, `runId`, and `trialIndex` query parameters after the application returns.
+Set `EVAL_EVIDENCE_URL` to a separately controlled endpoint. The harness calls it with `taskId`, `runId`, `trialId`, and `trialIndex` query parameters after the application returns. Return refused tool calls in an optional `rejectedToolCalls` array, so a forbidden tool fails the trial even when the service blocked it.
 
 Return durable, externally observed evidence:
 

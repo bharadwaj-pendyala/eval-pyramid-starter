@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,6 +100,7 @@ async function runTrial(
     workspace = await mkdtemp(join(tmpdir(), 'eval-pyramid-trial-'));
     const context: TrialContext = {
       runId,
+      trialId: randomUUID(),
       trialIndex,
       workspace,
     };
@@ -126,7 +128,10 @@ async function executeTrial(
   judgeProvider: JudgeProvider | undefined
 ): Promise<TrialRecord> {
   const startedAt = performance.now();
-  const systemRun = await environment.system.run(task.input, context);
+  const systemRun = await environment.system.run(
+    structuredClone(task.input),
+    context
+  );
   const latencyMs = Math.max(0, performance.now() - startedAt);
 
   let evidence: ObservedEvidence;
@@ -206,6 +211,7 @@ function measuredRun(
     outcome: evidence.outcome,
     transcript: systemRun.transcript,
     toolCalls: evidence.toolCalls,
+    rejectedToolCalls: evidence.rejectedToolCalls ?? [],
     evidenceSource: evidence.source,
     metrics: {
       latencyMs: Math.round(latencyMs * 100) / 100,
@@ -396,5 +402,5 @@ function fallbackProvenance(
 }
 
 function createRunId(): string {
-  return `${new Date().toISOString().replace(/[:.]/gu, '-')}-${process.pid}`;
+  return `${new Date().toISOString().replace(/[:.]/gu, '-')}-${process.pid}-${randomUUID().slice(0, 8)}`;
 }

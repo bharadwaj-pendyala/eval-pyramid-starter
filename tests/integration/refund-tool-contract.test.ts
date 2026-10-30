@@ -84,12 +84,19 @@ describe('refund tool provider boundary', () => {
       await expect(gateway.processRefund('42', 49)).rejects.toThrow(
         'Verified customer does not own the order'
       );
-      expect(service.observe().outcome).toEqual({
+      const evidence = service.observe();
+      expect(evidence.outcome).toEqual({
         ticket: { status: 'open' },
         refund: { status: 'not-created' },
         refundCount: 0,
         confirmationCount: 0,
       });
+      expect(evidence.toolCalls.map((call) => call.name)).toEqual([
+        'verify_identity',
+      ]);
+      expect(evidence.rejectedToolCalls).toEqual([
+        { name: 'process_refund', arguments: { orderId: '42', amount: 49 } },
+      ]);
     } finally {
       await service.close();
       await rm(workspace, { recursive: true, force: true });

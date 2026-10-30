@@ -64,6 +64,50 @@ describe('run suite boundaries', () => {
     }
   });
 
+  it('gives every trial its own copy of the input and a unique trial id', async () => {
+    const reportRoot = await temporaryRoot('isolation');
+    const listTask: EvalTask = {
+      ...task,
+      id: 'mutating-input',
+      input: { items: ['one'] },
+    };
+    const seen: { items: unknown; trialId: string }[] = [];
+    const factory = factoryFor({
+      system: {
+        run: (input, context) => {
+          const items = input['items'] as string[];
+          seen.push({ items: [...items], trialId: context.trialId });
+          items.pop();
+          return Promise.resolve(successfulRun());
+        },
+      },
+      observer: { observe: () => Promise.resolve(observed()) },
+    });
+
+    try {
+      await runSuite({
+        tasks: [listTask, { ...listTask, id: 'mutating-input-2' }],
+        factory,
+        trials: 2,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportRoot,
+      });
+
+      expect(seen.map((entry) => entry.items)).toEqual([
+        ['one'],
+        ['one'],
+        ['one'],
+        ['one'],
+      ]);
+      expect(new Set(seen.map((entry) => entry.trialId)).size).toBe(4);
+      expect(listTask.input).toEqual({ items: ['one'] });
+    } finally {
+      await rm(reportRoot, { recursive: true, force: true });
+    }
+  });
+
   it('captures system failures, disposes the environment, and creates a run id', async () => {
     const reportRoot = await temporaryRoot('runtime');
     let disposed = false;

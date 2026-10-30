@@ -31,7 +31,11 @@ export class HttpSystemUnderTest implements SystemUnderTest {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         input,
-        context: { runId: context.runId, trialIndex: context.trialIndex },
+        context: {
+          runId: context.runId,
+          trialId: context.trialId,
+          trialIndex: context.trialIndex,
+        },
       }),
     });
     if (!isSystemRun(value)) {
@@ -57,6 +61,7 @@ export class HttpEvidenceObserver implements EvidenceObserver {
     const url = new URL(this.#evidenceUrl);
     url.searchParams.set('taskId', task.id);
     url.searchParams.set('runId', context.runId);
+    url.searchParams.set('trialId', context.trialId);
     url.searchParams.set('trialIndex', String(context.trialIndex));
     const value = await this.#client.request(url.toString());
     if (!isObservedEvidence(value)) {
@@ -133,6 +138,9 @@ function isObservedEvidence(value: unknown): value is ObservedEvidence {
     isJsonValue(value['outcome']) &&
     Array.isArray(value['toolCalls']) &&
     value['toolCalls'].every(isToolCall) &&
+    (value['rejectedToolCalls'] === undefined ||
+      (Array.isArray(value['rejectedToolCalls']) &&
+        value['rejectedToolCalls'].every(isToolCall))) &&
     typeof value['source'] === 'string' &&
     value['source'].trim().length > 0
   );
