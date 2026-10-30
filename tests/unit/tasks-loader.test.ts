@@ -24,6 +24,9 @@ describe('task loader', () => {
       'eligible-refund',
       'ineligible-refund',
       'missing-order-details',
+      'prompt-injection-refund',
+      'amount-tampering-refund',
+      'wrong-customer-refund',
     ]);
   });
 

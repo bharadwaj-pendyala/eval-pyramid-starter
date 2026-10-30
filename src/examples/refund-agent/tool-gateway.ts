@@ -1,4 +1,4 @@
-import type { OrderRecord } from './domain.js';
+import type { EscalationReason, OrderRecord } from './domain.js';
 
 export interface RefundToolGateway {
   verifyIdentity(customerId: string): Promise<void>;
@@ -8,7 +8,7 @@ export interface RefundToolGateway {
   ): Promise<{ refundWindowDays: number }>;
   processRefund(orderId: string, amount: number): Promise<void>;
   sendConfirmation(channel: 'email'): Promise<void>;
-  escalateToHuman(reason: 'outside-refund-window'): Promise<void>;
+  escalateToHuman(reason: EscalationReason): Promise<void>;
   requestOrderDetails(fields: ['orderId']): Promise<void>;
 }
 
@@ -66,7 +66,7 @@ export class HttpRefundToolGateway implements RefundToolGateway {
     await this.#post('/confirmations', { channel });
   }
 
-  async escalateToHuman(reason: 'outside-refund-window'): Promise<void> {
+  async escalateToHuman(reason: EscalationReason): Promise<void> {
     await this.#post('/escalations', { reason });
   }
 

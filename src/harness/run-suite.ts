@@ -126,7 +126,7 @@ async function executeTrial(
   judgeProvider: JudgeProvider | undefined
 ): Promise<TrialRecord> {
   const startedAt = performance.now();
-  const systemRun = await environment.system.run(task, context);
+  const systemRun = await environment.system.run(task.input, context);
   const latencyMs = Math.max(0, performance.now() - startedAt);
 
   let evidence: ObservedEvidence;

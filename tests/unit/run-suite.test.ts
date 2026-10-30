@@ -34,6 +34,36 @@ const thresholds: ReleaseThresholds = {
 };
 
 describe('run suite boundaries', () => {
+  it('passes only the task input to the system under test', async () => {
+    const reportRoot = await temporaryRoot('oracle');
+    let received: unknown;
+    const factory = factoryFor({
+      system: {
+        run: (input) => {
+          received = input;
+          return Promise.resolve(successfulRun());
+        },
+      },
+      observer: { observe: () => Promise.resolve(observed()) },
+    });
+
+    try {
+      await runSuite({
+        tasks: [task],
+        factory,
+        trials: 1,
+        k: 1,
+        concurrency: 1,
+        thresholds,
+        reportRoot,
+      });
+
+      expect(received).toEqual(task.input);
+    } finally {
+      await rm(reportRoot, { recursive: true, force: true });
+    }
+  });
+
   it('captures system failures, disposes the environment, and creates a run id', async () => {
     const reportRoot = await temporaryRoot('runtime');
     let disposed = false;

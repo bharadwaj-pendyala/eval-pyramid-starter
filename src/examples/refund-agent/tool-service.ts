@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
 import type { JsonValue, ObservedEvidence, ToolCall } from '../../types.js';
-import type { OrderRecord } from './domain.js';
+import type { EscalationReason, OrderRecord } from './domain.js';
 
 interface RefundRecord {
   orderId: string;
@@ -22,7 +22,7 @@ interface RefundToolState {
   calls: ToolCall[];
   refunds: RefundRecord[];
   confirmations: Array<{ channel: 'email' }>;
-  escalations: Array<{ reason: 'outside-refund-window' }>;
+  escalations: Array<{ reason: EscalationReason }>;
   informationRequests: Array<{ fields: ['orderId'] }>;
 }
 
@@ -45,6 +45,13 @@ const defaultOrders: Record<string, OrderRecord> = {
     amount: 85,
     ageDays: 180,
     duplicateCharge: false,
+  },
+  '55': {
+    orderId: '55',
+    customerId: 'customer-300',
+    amount: 120,
+    ageDays: 3,
+    duplicateCharge: true,
   },
 };
 
@@ -114,6 +121,7 @@ export class RefundToolService {
       refund: refund
         ? { status: refund.status, amount: refund.amount }
         : { status: 'not-created' },
+      refundCount: this.#state.refunds.length,
     };
     return {
       outcome,
@@ -213,7 +221,7 @@ export class RefundToolService {
       if (request.method === 'POST' && url.pathname === '/escalations') {
         const body = await jsonBody(request);
         const reason = requiredString(body, 'reason');
-        if (reason !== 'outside-refund-window') {
+        if (!isEscalationReason(reason)) {
           throw new HttpError(400, 'Unsupported escalation reason.');
         }
         this.#state.escalations.push({ reason });
@@ -339,4 +347,10 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 
 function noContent(response: ServerResponse): void {
   response.writeHead(204).end();
+}
+
+function isEscalationReason(value: string): value is EscalationReason {
+  return (
+    value === 'outside-refund-window' || value === 'order-customer-mismatch'
+  );
 }

@@ -16,11 +16,13 @@ export interface RubricCriterion {
 
 export type TaskSeverity = 'critical' | 'high' | 'medium' | 'low';
 
+export type TaskInput = { [key: string]: JsonValue };
+
 export interface EvalTask {
   id: string;
   description: string;
   severity: TaskSeverity;
-  input: { [key: string]: JsonValue };
+  input: TaskInput;
   expected: {
     outputSchema?: { [key: string]: JsonValue };
     outcome?: { [key: string]: JsonValue };
@@ -89,8 +91,9 @@ export interface TrialContext {
   workspace: string;
 }
 
+// The system never sees `expected` or `rubric`, so it cannot copy the answer key.
 export interface SystemUnderTest {
-  run(task: EvalTask, context: TrialContext): Promise<SystemRun>;
+  run(input: TaskInput, context: TrialContext): Promise<SystemRun>;
 }
 
 export interface EvidenceObserver {

@@ -35,7 +35,7 @@ describe('real example eval stack', () => {
         runId: 'integration-test',
       });
 
-      expect(result.records).toHaveLength(6);
+      expect(result.records).toHaveLength(12);
       expect(result.records.every((record) => record.passed)).toBe(true);
       expect(
         result.records.every((record) =>

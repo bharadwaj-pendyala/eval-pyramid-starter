@@ -1,12 +1,17 @@
 import type {
-  EvalTask,
   JsonValue,
   SystemRun,
   SystemUnderTest,
+  TaskInput,
   ToolCall,
   TranscriptEvent,
 } from '../../types.js';
-import { decideRefund, extractOrderId, type OrderRecord } from './domain.js';
+import {
+  decideRefund,
+  extractOrderId,
+  type EscalationReason,
+  type OrderRecord,
+} from './domain.js';
 import type { RefundToolGateway } from './tool-gateway.js';
 
 export class RefundAgent implements SystemUnderTest {
@@ -16,8 +21,8 @@ export class RefundAgent implements SystemUnderTest {
     this.#tools = tools;
   }
 
-  async run(task: EvalTask): Promise<SystemRun> {
-    const input = refundInput(task.input);
+  async run(taskInput: TaskInput): Promise<SystemRun> {
+    const input = refundInput(taskInput);
     const calls: ToolCall[] = [];
     await this.#call(calls, 'verify_identity', {
       customerId: input.customerId,
@@ -28,7 +33,7 @@ export class RefundAgent implements SystemUnderTest {
 
     const order = await this.#call(calls, 'fetch_order', { orderId });
     if (order.customerId !== input.customerId) {
-      throw new Error('The order does not belong to the verified customer.');
+      return this.#escalate(input.message, calls, 'order-customer-mismatch');
     }
 
     const policy: 'duplicate-charge' | 'refund-window' = order.duplicateCharge
@@ -45,7 +50,7 @@ export class RefundAgent implements SystemUnderTest {
         decision.policy
       );
     }
-    return this.#escalate(input.message, calls);
+    return this.#escalate(input.message, calls, 'outside-refund-window');
   }
 
   async #missingOrder(message: string, calls: ToolCall[]): Promise<SystemRun> {
@@ -74,13 +79,14 @@ export class RefundAgent implements SystemUnderTest {
     });
   }
 
-  async #escalate(message: string, calls: ToolCall[]): Promise<SystemRun> {
-    await this.#call(calls, 'escalate_to_human', {
-      reason: 'outside-refund-window',
-    });
+  async #escalate(
+    message: string,
+    calls: ToolCall[],
+    reason: EscalationReason
+  ): Promise<SystemRun> {
+    await this.#call(calls, 'escalate_to_human', { reason });
     return buildRun(message, calls, {
-      message:
-        'The order is outside the refund policy window, so the ticket was escalated for human review.',
+      message: escalationMessages[reason],
       policyCited: true,
       status: 'escalated',
     });
@@ -114,7 +120,7 @@ export class RefundAgent implements SystemUnderTest {
   async #call(
     calls: ToolCall[],
     name: 'escalate_to_human',
-    argumentsValue: { reason: 'outside-refund-window' }
+    argumentsValue: { reason: EscalationReason }
   ): Promise<void>;
   async #call(
     calls: ToolCall[],
@@ -146,7 +152,9 @@ export class RefundAgent implements SystemUnderTest {
       case 'send_confirmation':
         return this.#tools.sendConfirmation('email');
       case 'escalate_to_human':
-        return this.#tools.escalateToHuman('outside-refund-window');
+        return this.#tools.escalateToHuman(
+          argumentsValue['reason'] as EscalationReason
+        );
       case 'request_order_details':
         return this.#tools.requestOrderDetails(['orderId']);
       default:
@@ -168,6 +176,13 @@ function refundInput(input: { [key: string]: JsonValue }): {
   }
   return { customerId, message };
 }
+
+const escalationMessages: Record<EscalationReason, string> = {
+  'outside-refund-window':
+    'The order is outside the refund policy window, so the ticket was escalated for human review.',
+  'order-customer-mismatch':
+    'The order is not linked to your verified account, so the ticket was escalated for human review.',
+};
 
 function buildRun(
   userMessage: string,

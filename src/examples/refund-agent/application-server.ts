@@ -7,7 +7,7 @@ import {
 import type { AddressInfo } from 'node:net';
 
 import type {
-  EvalTask,
+  TaskInput,
   JsonValue,
   SystemUnderTest,
   TrialContext,
@@ -78,9 +78,9 @@ export class RefundApplicationServer {
         return;
       }
       const body = await readJson(request);
-      const task = body['task'];
+      const input = body['input'];
       const context = body['context'];
-      if (!isEvalTask(task) || !isRemoteContext(context)) {
+      if (!isTaskInput(input) || !isRemoteContext(context)) {
         sendJson(response, 400, { error: 'Invalid run request.' });
         return;
       }
@@ -89,7 +89,7 @@ export class RefundApplicationServer {
         trialIndex: context.trialIndex,
         workspace: this.#workspace,
       };
-      const result = await this.#system.run(task, trialContext);
+      const result = await this.#system.run(input, trialContext);
       sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 500, {
@@ -99,16 +99,8 @@ export class RefundApplicationServer {
   }
 }
 
-function isEvalTask(value: unknown): value is EvalTask {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['description'] === 'string' &&
-    ['critical', 'high', 'medium', 'low'].includes(String(value['severity'])) &&
-    isRecord(value['input']) &&
-    Object.values(value['input']).every(isJsonValue) &&
-    isRecord(value['expected'])
-  );
+function isTaskInput(value: unknown): value is TaskInput {
+  return isRecord(value) && Object.values(value).every(isJsonValue);
 }
 
 function isRemoteContext(

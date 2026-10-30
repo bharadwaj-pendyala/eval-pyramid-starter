@@ -1,5 +1,6 @@
 import type {
   EvalTask,
+  TaskInput,
   EvidenceObserver,
   JsonValue,
   ObservedEvidence,
@@ -24,12 +25,12 @@ export class HttpSystemUnderTest implements SystemUnderTest {
     this.#client = new JsonHttpClient(options);
   }
 
-  async run(task: EvalTask, context: TrialContext): Promise<SystemRun> {
+  async run(input: TaskInput, context: TrialContext): Promise<SystemRun> {
     const value = await this.#client.request(this.#runUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        task,
+        input,
         context: { runId: context.runId, trialIndex: context.trialIndex },
       }),
     });

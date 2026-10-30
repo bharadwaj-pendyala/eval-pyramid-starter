@@ -110,23 +110,33 @@ function gradeTools(
   required: ToolExpectation[],
   forbidden: string[]
 ): Grade {
-  const missing = required.filter(
-    (expected) => !calls.some((call) => toolMatches(call, expected))
-  );
+  const unmatched = unmatchedInOrder(calls, required);
   const forbiddenCalls = calls.filter((call) => forbidden.includes(call.name));
-  const passed = missing.length === 0 && forbiddenCalls.length === 0;
+  const passed = unmatched.length === 0 && forbiddenCalls.length === 0;
 
   const problems = [
-    ...missing.map((item) => `missing ${item.name}`),
-    ...forbiddenCalls.map((item) => `forbidden ${item.name}`),
+    ...unmatched.map((item) => `${item.name} missing or out of order`),
+    ...forbiddenCalls.map((item) => `${item.name} forbidden`),
   ];
 
   return binaryGrade(
     'tool-policy',
     passed,
-    'Required tools were called and forbidden tools were avoided.',
+    'Required tools were called in order and forbidden tools were avoided.',
     `Tool policy failed: ${problems.join(', ')}.`
   );
+}
+
+function unmatchedInOrder(
+  calls: ToolCall[],
+  required: ToolExpectation[]
+): ToolExpectation[] {
+  let matched = 0;
+  for (const call of calls) {
+    const next = required[matched];
+    if (next && toolMatches(call, next)) matched += 1;
+  }
+  return required.slice(matched);
 }
 
 function toolMatches(call: ToolCall, expected: ToolExpectation): boolean {

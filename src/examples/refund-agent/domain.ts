@@ -6,6 +6,9 @@ export interface OrderRecord {
   duplicateCharge: boolean;
 }
 
+export type EscalationReason =
+  'outside-refund-window' | 'order-customer-mismatch';
+
 export type RefundDecision =
   | { action: 'refund'; policy: 'duplicate-charge' | 'refund-window' }
   | { action: 'escalate'; policy: 'refund-window' };
