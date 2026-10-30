@@ -127,6 +127,7 @@ export class RefundToolService {
         ? { status: refund.status, amount: refund.amount }
         : { status: 'not-created' },
       refundCount: this.#state.refunds.length,
+      confirmationCount: this.#state.confirmations.length,
     };
     return {
       outcome,

@@ -68,6 +68,22 @@ describe('judge providers', () => {
     expect(summary.passed).toBe(false);
   });
 
+  it('fails calibration for a judge that always abstains', async () => {
+    const summary = await calibrateJudge({
+      name: 'abstaining-judge',
+      score: (request) =>
+        Promise.resolve({
+          score: request.criterion.minimumScore,
+          confidence: 0,
+          rationale: 'Not enough evidence.',
+          unknown: true,
+        }),
+    });
+
+    expect(summary.abstentions).toBe(summary.examples);
+    expect(summary.passed).toBe(false);
+  });
+
   it('marks a signal-free criterion as unknown', async () => {
     const provider = new SignalMatcherTestDouble();
     const result = await provider.score({

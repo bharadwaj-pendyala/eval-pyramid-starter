@@ -225,6 +225,7 @@ export interface GoldenJudgeExample {
 export interface CalibrationSummary {
   provider: string;
   examples: number;
+  abstentions: number;
   meanAbsoluteError: number;
   agreementWithinTolerance: number;
   tolerance: number;

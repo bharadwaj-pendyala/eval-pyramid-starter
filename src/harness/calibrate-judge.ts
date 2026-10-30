@@ -17,6 +17,7 @@ export async function calibrateJudge(
   const contents = await readFile(goldenSetFile, 'utf8');
   const examples = loadGoldenSet(contents, goldenSetFile);
   const differences: number[] = [];
+  let abstentions = 0;
 
   for (const example of examples) {
     const task = calibrationTask(example);
@@ -26,7 +27,11 @@ export async function calibrateJudge(
       run,
       criterion: example.criterion,
     });
-    differences.push(Math.abs(result.score - example.humanScore));
+    // An abstention is not agreement, so it counts as the largest possible error.
+    if (result.unknown) abstentions += 1;
+    differences.push(
+      result.unknown ? 1 : Math.abs(result.score - example.humanScore)
+    );
   }
 
   const meanAbsoluteError = average(differences);
@@ -37,6 +42,7 @@ export async function calibrateJudge(
   return {
     provider: provider.name,
     examples: examples.length,
+    abstentions,
     meanAbsoluteError,
     agreementWithinTolerance,
     tolerance,

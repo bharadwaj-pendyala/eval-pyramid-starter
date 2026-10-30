@@ -51,6 +51,7 @@ describe('refund tool provider boundary', () => {
         ticket: { status: 'resolved' },
         refund: { status: 'processed', amount: 49 },
         refundCount: 1,
+        confirmationCount: 1,
       });
       expect(evidence.toolCalls.map((call) => call.name)).toEqual([
         'verify_identity',
@@ -87,6 +88,7 @@ describe('refund tool provider boundary', () => {
         ticket: { status: 'open' },
         refund: { status: 'not-created' },
         refundCount: 0,
+        confirmationCount: 0,
       });
     } finally {
       await service.close();
