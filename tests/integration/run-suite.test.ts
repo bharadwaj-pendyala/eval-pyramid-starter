@@ -59,6 +59,21 @@ describe('real example eval stack', () => {
       expect(trialLines).toContain(
         '"usageSource":"example-rule-agent:no-model-provider"'
       );
+      const reviewQueue = (
+        await readFile(
+          join(result.latestDirectory, 'review-queue.jsonl'),
+          'utf8'
+        )
+      )
+        .trim()
+        .split('\n')
+        .map(
+          (line) => JSON.parse(line) as { taskId: string; reasons: string[] }
+        );
+      expect(reviewQueue).toHaveLength(6);
+      expect(reviewQueue[0]?.reasons).toEqual([
+        'sampled pass: check for a false pass',
+      ]);
       expect(html).toContain('Independent evidence');
       expect(html).toContain('integration-test');
       await expect(

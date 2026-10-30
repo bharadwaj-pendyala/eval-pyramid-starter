@@ -93,24 +93,41 @@ function buildReviewQueue(
   runId: string,
   records: TrialRecord[]
 ): ReviewQueueEntry[] {
+  const sampledPasses = firstPassPerTask(records);
   return records
     .filter(
       (record) =>
         !record.passed ||
-        record.grades.some((grade) => grade.rationale.startsWith('Unknown:'))
+        record.grades.some((grade) => grade.rationale.startsWith('Unknown:')) ||
+        sampledPasses.has(record)
     )
     .map((record) => ({
       runId,
       taskId: record.taskId,
       severity: record.severity,
       trialIndex: record.trialIndex,
-      reasons: record.grades
-        .filter((grade) => !grade.passed)
-        .map((grade) => `${grade.grader}: ${grade.rationale}`),
+      reasons: sampledPasses.has(record)
+        ? ['sampled pass: check for a false pass']
+        : record.grades
+            .filter((grade) => !grade.passed)
+            .map((grade) => `${grade.grader}: ${grade.rationale}`),
       output: record.run.output,
       humanScore: null,
       notes: '',
     }));
+}
+
+// A queue of failures alone never shows a reviewer a false pass.
+function firstPassPerTask(records: TrialRecord[]): Set<TrialRecord> {
+  const sampled = new Map<string, TrialRecord>();
+  for (const record of records) {
+    const clean =
+      record.passed &&
+      !record.grades.some((grade) => grade.rationale.startsWith('Unknown:'));
+    if (clean && !sampled.has(record.taskId))
+      sampled.set(record.taskId, record);
+  }
+  return new Set(sampled.values());
 }
 
 function failureMarkdown(records: TrialRecord[]): string {

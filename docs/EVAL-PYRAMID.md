@@ -118,7 +118,7 @@ Use deterministic graders for anything a program can establish exactly:
 
 Use a model judge only for atomic semantic criteria that cannot be made deterministic. The checked-in OpenAI adapter uses strict structured output, timeouts, bounded retries, and an instruction that treats task and output text as untrusted evidence. A live judged run requires a passing calibration record for the same model and current golden set.
 
-Use human review to adjudicate failed or unknown trials. Decisions are append-only under `reports/reviews`, do not mutate the original run, and can be exported as calibration candidates.
+Use human review to adjudicate failed or unknown trials. The queue also holds the first passing trial of each task, because a queue of failures alone never shows a reviewer a false pass. Decisions are append-only under `reports/reviews`, do not mutate the original run, and can be exported as calibration candidates.
 
 ## pass@k and pass^k
 
