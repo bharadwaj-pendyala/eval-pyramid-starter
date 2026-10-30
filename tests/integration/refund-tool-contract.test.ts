@@ -95,8 +95,18 @@ describe('refund tool provider boundary', () => {
         'verify_identity',
       ]);
       expect(evidence.rejectedToolCalls).toEqual([
-        { name: 'process_refund', arguments: { orderId: '42', amount: 49 } },
+        {
+          name: 'process_refund',
+          arguments: { orderId: '42', amount: 49 },
+          position: 1,
+        },
       ]);
+      await expect(gateway.processRefund('77', 0)).rejects.toThrow();
+      expect(service.observe().rejectedToolCalls?.at(-1)).toEqual({
+        name: 'process_refund',
+        arguments: { orderId: '77', amount: 0 },
+        position: 1,
+      });
     } finally {
       await service.close();
       await rm(workspace, { recursive: true, force: true });

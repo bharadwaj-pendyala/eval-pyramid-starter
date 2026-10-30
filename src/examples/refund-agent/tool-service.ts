@@ -8,7 +8,12 @@ import {
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
-import type { JsonValue, ObservedEvidence, ToolCall } from '../../types.js';
+import type {
+  JsonValue,
+  ObservedEvidence,
+  RejectedToolCall,
+  ToolCall,
+} from '../../types.js';
 import type { EscalationReason, OrderRecord } from './domain.js';
 
 interface RefundRecord {
@@ -20,7 +25,7 @@ interface RefundRecord {
 interface RefundToolState {
   verifiedCustomerId: string | null;
   calls: ToolCall[];
-  rejectedCalls: ToolCall[];
+  rejectedCalls: RejectedToolCall[];
   refunds: RefundRecord[];
   confirmations: Array<{ channel: 'email' }>;
   escalations: Array<{ reason: EscalationReason }>;
@@ -171,8 +176,11 @@ export class RefundToolService {
       }
       if (request.method === 'POST' && url.pathname === '/identity/verify') {
         const body = await jsonBody(request);
+        attempt = {
+          name: 'verify_identity',
+          arguments: submittedArguments(body),
+        };
         const customerId = requiredString(body, 'customerId');
-        attempt = { name: 'verify_identity', arguments: { customerId } };
         if (!customerId.startsWith('customer-')) {
           throw new HttpError(403, 'Identity verification failed.');
         }
@@ -203,9 +211,12 @@ export class RefundToolService {
       }
       if (request.method === 'POST' && url.pathname === '/refunds') {
         const body = await jsonBody(request);
+        attempt = {
+          name: 'process_refund',
+          arguments: submittedArguments(body),
+        };
         const orderId = requiredString(body, 'orderId');
         const amount = requiredPositiveNumber(body, 'amount');
-        attempt = { name: 'process_refund', arguments: { orderId, amount } };
         const order = this.#orders[orderId];
         if (!order) throw new HttpError(404, `Order ${orderId} was not found.`);
         if (this.#state.verifiedCustomerId !== order.customerId) {
@@ -231,8 +242,11 @@ export class RefundToolService {
       }
       if (request.method === 'POST' && url.pathname === '/confirmations') {
         const body = await jsonBody(request);
+        attempt = {
+          name: 'send_confirmation',
+          arguments: submittedArguments(body),
+        };
         const channel = requiredString(body, 'channel');
-        attempt = { name: 'send_confirmation', arguments: { channel } };
         if (channel !== 'email') {
           throw new HttpError(400, 'Unsupported confirmation channel.');
         }
@@ -249,8 +263,11 @@ export class RefundToolService {
       }
       if (request.method === 'POST' && url.pathname === '/escalations') {
         const body = await jsonBody(request);
+        attempt = {
+          name: 'escalate_to_human',
+          arguments: submittedArguments(body),
+        };
         const reason = requiredString(body, 'reason');
-        attempt = { name: 'escalate_to_human', arguments: { reason } };
         if (!isEscalationReason(reason)) {
           throw new HttpError(400, 'Unsupported escalation reason.');
         }
@@ -264,6 +281,10 @@ export class RefundToolService {
         url.pathname === '/information-requests'
       ) {
         const body = await jsonBody(request);
+        attempt = {
+          name: 'request_order_details',
+          arguments: submittedArguments(body),
+        };
         if (!isOrderIdFields(body['fields'])) {
           throw new HttpError(400, 'Unsupported information request.');
         }
@@ -276,7 +297,10 @@ export class RefundToolService {
       throw new HttpError(404, 'Not found.');
     } catch (error) {
       if (attempt && error instanceof HttpError) {
-        this.#state.rejectedCalls.push(attempt);
+        this.#state.rejectedCalls.push({
+          ...attempt,
+          position: this.#state.calls.length,
+        });
         await this.#persist().catch(() => undefined);
       }
       const status = error instanceof HttpError ? error.status : 500;
@@ -387,4 +411,11 @@ function isEscalationReason(value: string): value is EscalationReason {
   return (
     value === 'outside-refund-window' || value === 'order-customer-mismatch'
   );
+}
+
+// Arguments are recorded as submitted, so a refusal for bad input still reaches the audit log.
+function submittedArguments(body: Record<string, unknown>): {
+  [key: string]: JsonValue;
+} {
+  return body as { [key: string]: JsonValue };
 }
