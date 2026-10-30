@@ -1,8 +1,8 @@
 # Eval Pyramid Starter
 
-An executable TypeScript reference for testing LLM applications and agents with the same progression used in mature software testing: many component checks, fewer real boundary tests, and a small black-box system layer.
+An executable TypeScript reference for evaluating LLM applications and agents. The pyramid orders graders by the cost of one verdict: many deterministic code checks, fewer calibrated model-judge verdicts, and a small amount of human review. Execution scope and repeated trials are separate axes, not layers.
 
-The repository follows one refund workflow through every layer. The offline example starts a real application server and a separate tool service on ephemeral localhost ports. Tool actions mutate trial-scoped state on disk. The harness reads that state through an observer endpoint, measures wall-clock latency itself, applies release gates, and writes reviewable evidence. Nothing depends on an injected trial-number failure.
+The repository follows one refund workflow through every grader and scope. The offline example starts a real application server and a separate tool service on ephemeral localhost ports. Tool actions mutate trial-scoped state on disk. The harness reads that state through an observer endpoint, measures wall-clock latency itself, applies release gates, and writes reviewable evidence. Nothing depends on an injected trial-number failure.
 
 ## Quick start
 
@@ -26,15 +26,23 @@ Every run is retained under `reports/runs/<run-id>`. `reports/latest` is a conve
 
 ## The executable pyramid
 
+| Axis            | Question                                      | Values                                                   |
+| --------------- | --------------------------------------------- | -------------------------------------------------------- |
+| Grader          | What does one verdict cost, and who gives it? | Deterministic code, calibrated model judge, human review |
+| Execution scope | How much of the system runs to make evidence? | Component, integration, system                           |
+| Trials          | How many times does each task run?            | One trial, or `n` isolated trials summarized per task    |
+
+Any grader can score any trial at any scope. See [The executable eval pyramid](docs/EVAL-PYRAMID.md) for why the three stay separate.
+
+The table below follows the execution-scope axis:
+
 | Scope       | Framework                          | Boundary proved                                                                                                       | Example                                                                                            |
 | ----------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Component   | Vitest                             | Pure policy, parsing, grader, metric, and redaction behavior                                                          | [`tests/unit/refund-domain.test.ts`](tests/unit/refund-domain.test.ts)                             |
 | Integration | Vitest plus real Node HTTP servers | Consumer and provider contracts, runtime validation, persisted tool state, and a complete scenario over TCP           | [`tests/integration/refund-tool-contract.test.ts`](tests/integration/refund-tool-contract.test.ts) |
 | System      | Public eval CLI plus Playwright    | Tasks through application server, tool service, observer, graders, gates, report files, report server, and browser UI | [`tests/e2e/report.spec.ts`](tests/e2e/report.spec.ts)                                             |
 
-Test scope and verdict method are separate axes. Vitest and Playwright determine how much of the system executes. Deterministic assertions, calibrated model judges, and human decisions determine how evidence receives a verdict. Calling an LLM judge does not make a component test end-to-end.
-
-The refund slice covers three consequential paths: a duplicate charge that must be refunded and confirmed, an old order that must not trigger a financial action, and a request missing its order identifier. The financial paths are marked `critical`, so one failure blocks the release even when aggregate rates remain high.
+The refund slice covers three consequential paths: a duplicate charge that must be refunded and confirmed, an old order that must not trigger a financial action, and a request missing its order identifier. Three adversarial tasks add a prompt injection, a request for more than the charged amount, and an order that belongs to another customer. The financial paths are marked `critical`, so one failure blocks the release even when aggregate rates remain high.
 
 ## Real evidence flow
 

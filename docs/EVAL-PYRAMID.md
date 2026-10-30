@@ -1,23 +1,35 @@
 # The executable eval pyramid
 
-The pyramid classifies tests by execution scope, not by assertion type. Each higher layer keeps more real boundaries, costs more to run and diagnose, and therefore contains fewer cases.
+The pyramid in this repository orders graders by the cost of one verdict. Code checks are cheapest and cover the most. A calibrated model judge costs more and covers less. Human review costs the most and covers the least.
 
-## Two axes
+```text
+            human review        few verdicts, highest cost
+         calibrated model judge
+   deterministic code checks     most verdicts, lowest cost
+```
 
-An AI system needs two independent decisions:
+Two other decisions are independent of the grader. Most published eval pyramids merge one of them into the layers, so this repository keeps all three apart:
 
-1. How much of the application should execute?
-2. How should the resulting evidence receive a verdict?
+| Axis            | Question                                      | Values in this repository                                |
+| --------------- | --------------------------------------------- | -------------------------------------------------------- |
+| Grader          | What does one verdict cost, and who gives it? | Deterministic code, calibrated model judge, human review |
+| Execution scope | How much of the system runs to make evidence? | Component, integration, system                           |
+| Trials          | How many times does each task run?            | One trial, or `n` isolated trials summarized per task    |
 
-| Execution scope | Deterministic verdict                                               | Model-judged verdict           | Human verdict                                  |
-| --------------- | ------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- |
-| Component       | Default for schemas, policies, parsing, tool rules, and metric math | Usually unnecessary            | Used to define expected behavior               |
-| Integration     | Default for state transitions, contracts, safety rules, and budgets | Add only for semantic criteria | Review new and failed scenarios                |
-| System          | Release gates and repeated-use reliability                          | Calibrated rubric scores       | Sample releases and adjudicate uncertain cases |
+- **Trials are not a layer.** Any grader can score any trial. Repetition answers how often a task succeeds. It does not decide how a verdict is made.
+- **Running a trial and grading it have different costs.** A ledger check is cheap to grade. The full agent run that produces the ledger state can still be slow and expensive.
+- **Scope does not choose the grader.** Calling a model judge from a unit test does not make that test end-to-end. A Playwright system test can use only deterministic verdicts.
 
-Calling a model judge from a unit test does not make that test end-to-end. A Playwright system test can use deterministic verdicts. Scope says what executed. A grader says how evidence was assessed.
+Anthropic's [agent eval guide](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) already defines tasks, trials, and graders as separate terms. This repository keeps that separation inside the pyramid picture.
 
-## One use case through every layer
+## The system does not grade itself
+
+- The system under test receives only `task.input`. It never sees `expected` or `rubric`.
+- The outcome comes from the tool service that executed the actions, through a separate observer boundary. The agent's own report of what it did is never the outcome.
+- Required tools must appear in the listed order, so a refund before identity verification fails.
+- Tasks that can move money are `critical`. One failed critical trial blocks the release, whatever the aggregate rates are.
+
+## One use case through every scope
 
 The refund workflow is:
 
@@ -31,13 +43,15 @@ customer request
   -> grade output, outcome, tool policy, usage, and latency
 ```
 
-The task set covers a valid duplicate-charge refund, a prohibited out-of-window refund, and missing order details. It exercises a successful financial action, prevention of an unsafe action, and safe handling of incomplete input.
+The task set covers a valid duplicate-charge refund, a prohibited out-of-window refund, and missing order details. It exercises a successful financial action, prevention of an unsafe action, and safe handling of incomplete input. Three adversarial tasks add a prompt injection in the customer message, a request for more money than the charge, and an order that belongs to another customer.
 
-## Layer 1: component checks with Vitest
+The sections below follow the execution-scope axis. Each scope can use any grader.
+
+## Component scope with Vitest
 
 [`tests/unit/refund-domain.test.ts`](../tests/unit/refund-domain.test.ts) calls the pure order parser and policy decision directly. It has no filesystem, HTTP, model, report, or tool dependency.
 
-Use this layer for broad input tables and exact invariants. A failure should name a small function and run in milliseconds.
+Use this scope for broad input tables and exact invariants. A failure should name a small function and run in milliseconds.
 
 ```bash
 npm run test:unit
@@ -45,7 +59,7 @@ npm run test:unit
 
 The equivalent Java choices are JUnit 5 or TestNG. The framework is less important than preserving the component boundary.
 
-## Layer 2: integration checks with real provider boundaries
+## Integration scope with real provider boundaries
 
 [`tests/integration/refund-tool-contract.test.ts`](../tests/integration/refund-tool-contract.test.ts) starts the actual tool provider on an ephemeral TCP port and calls it through the production HTTP gateway. It verifies request semantics, runtime response validation, ownership enforcement, state mutation, and persisted evidence. A malformed response comes from a real HTTP server and is rejected at the consumer boundary.
 
@@ -55,11 +69,11 @@ The equivalent Java choices are JUnit 5 or TestNG. The framework is less importa
 npm run test:integration
 ```
 
-This is stronger than an HTTP interception test because both consumer and provider code execute over a real socket. When different teams or repositories own the services, add a published OpenAPI contract or Pact consumer and provider verification to the same layer. A mock by itself does not prove that the deployed provider conforms.
+This is stronger than an HTTP interception test because both consumer and provider code execute over a real socket. When different teams or repositories own the services, add a published OpenAPI contract or Pact consumer and provider verification at the same scope. A mock by itself does not prove that the deployed provider conforms.
 
 The Java equivalents are JUnit 5 plus a real embedded service, Testcontainers, WireMock for targeted client behavior, and Pact JVM for cross-team contracts.
 
-## Layer 3: black-box checks with the CLI and Playwright
+## System scope with the CLI and Playwright
 
 `npm run test:system` first invokes the public eval CLI. Every trial enters through an HTTP application endpoint, crosses the HTTP tool provider, reads external evidence, evaluates release gates, and writes a report. [`tests/e2e/report.spec.ts`](../tests/e2e/report.spec.ts) then inspects the served report in desktop and mobile Chromium.
 
@@ -67,7 +81,7 @@ The Java equivalents are JUnit 5 plus a real embedded service, Testcontainers, W
 npm run test:system
 ```
 
-This layer answers whether the shipped workflow operates as a whole. Keep it small. Branch-heavy policy behavior belongs at the component layer, while boundary failure modes belong in integration.
+This scope answers whether the shipped workflow operates as a whole. Keep it small. Branch-heavy policy behavior belongs at component scope, and boundary failure modes belong at integration scope.
 
 The Java equivalents are Playwright for Java or Selenium for browser behavior, plus a public API or CLI entry point for the system setup.
 
@@ -79,7 +93,7 @@ Harness unit tests still use small test doubles to prove cleanup and error handl
 
 The local rule-based application should produce 100 percent reliability. Repeated runs are still useful for proving fresh trial environments and report math. Reliability variance becomes meaningful after `eval:live` connects to a stochastic model-backed SUT.
 
-## Verdict methods
+## Grader layers
 
 Use deterministic graders for anything a program can establish exactly:
 
@@ -100,6 +114,8 @@ Use human review to adjudicate failed or unknown trials. Decisions are append-on
 
 Each sampled trial in this repository receives a fresh application server, tool server, temporary workspace, and state file. The estimators describe those isolated attempts. They do not model a sequential retry conversation or shared-session recovery.
 
-## Placement rule
+## Placement rules
 
-Put a test at the lowest layer that can prove the behavior, then promote only representative or high-risk paths upward. This keeps failures diagnostic while preserving a small set of black-box proofs.
+- Use the cheapest grader that measures the requirement accurately. Move a criterion down a layer when it becomes unambiguous, for example from human review to a judge rubric, then to a code check.
+- Run a check at the smallest scope that can prove the behavior. Promote only representative or high-risk paths to system scope.
+- Choose the trial count from the question. Use one trial to prove a deterministic path. Use repeated trials per task to measure how often a stochastic system succeeds.
