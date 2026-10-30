@@ -40,6 +40,12 @@ export interface ToolCall {
   arguments: { [key: string]: JsonValue };
 }
 
+// `position` is how many completed calls came before the refusal, so graders can
+// rebuild the order in which the system tried each tool.
+export interface RejectedToolCall extends ToolCall {
+  position: number;
+}
+
 export interface TranscriptEvent {
   role: 'assistant' | 'system' | 'tool' | 'user';
   content: string;
@@ -64,7 +70,7 @@ export interface ObservedEvidence {
   outcome: JsonValue;
   toolCalls: ToolCall[];
   // Calls the tool service refused. A forbidden tool fails even when it was refused.
-  rejectedToolCalls?: ToolCall[];
+  rejectedToolCalls?: RejectedToolCall[];
   source: string;
 }
 
@@ -83,7 +89,7 @@ export interface AgentRun {
   outcome: JsonValue;
   transcript: TranscriptEvent[];
   toolCalls: ToolCall[];
-  rejectedToolCalls?: ToolCall[];
+  rejectedToolCalls?: RejectedToolCall[];
   evidenceSource: string;
   metrics: TrialMetrics;
 }

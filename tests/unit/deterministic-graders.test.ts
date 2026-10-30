@@ -108,7 +108,9 @@ describe('deterministic graders', () => {
   it('fails a forbidden tool the service refused', () => {
     const grades = gradeDeterministically(task, {
       ...run,
-      rejectedToolCalls: [{ name: 'delete_customer', arguments: {} }],
+      rejectedToolCalls: [
+        { name: 'delete_customer', arguments: {}, position: 1 },
+      ],
     });
 
     expect(
@@ -119,6 +121,57 @@ describe('deterministic graders', () => {
         'delete_customer forbidden (attempted)'
       ) as string,
     });
+  });
+
+  it('fails a refused protected action taken before its prerequisite', () => {
+    const orderedTask: EvalTask = {
+      ...task,
+      expected: {
+        requiredTools: [
+          { name: 'verify_identity' },
+          { name: 'process_refund' },
+        ],
+      },
+    };
+    const grades = gradeDeterministically(orderedTask, {
+      ...run,
+      toolCalls: [
+        { name: 'verify_identity', arguments: { customerId: 'customer-1' } },
+        { name: 'process_refund', arguments: { orderId: '42' } },
+      ],
+      rejectedToolCalls: [
+        { name: 'process_refund', arguments: { orderId: '42' }, position: 0 },
+      ],
+    });
+
+    expect(grades[0]?.passed).toBe(false);
+    expect(grades[0]?.rationale).toContain(
+      'process_refund called before its prerequisites'
+    );
+  });
+
+  it('passes a refused retry of the current step', () => {
+    const orderedTask: EvalTask = {
+      ...task,
+      expected: {
+        requiredTools: [
+          { name: 'verify_identity' },
+          { name: 'process_refund' },
+        ],
+      },
+    };
+    const grades = gradeDeterministically(orderedTask, {
+      ...run,
+      toolCalls: [
+        { name: 'verify_identity', arguments: { customerId: 'customer-1' } },
+        { name: 'process_refund', arguments: { orderId: '42' } },
+      ],
+      rejectedToolCalls: [
+        { name: 'process_refund', arguments: { orderId: '42' }, position: 1 },
+      ],
+    });
+
+    expect(grades[0]?.passed).toBe(true);
   });
 
   it('validates separate copies of a schema that share an $id', () => {

@@ -62,7 +62,7 @@ The harness measures wall-clock latency around this request. An application-prov
 
 ## 3. Implement the evidence endpoint
 
-Set `EVAL_EVIDENCE_URL` to a separately controlled endpoint. The harness calls it with `taskId`, `runId`, `trialId`, and `trialIndex` query parameters after the application returns. Return refused tool calls in an optional `rejectedToolCalls` array, so a forbidden tool fails the trial even when the service blocked it.
+Set `EVAL_EVIDENCE_URL` to a separately controlled endpoint. The harness calls it with `taskId`, `runId`, `trialId`, and `trialIndex` query parameters after the application returns. Return refused tool calls in an optional `rejectedToolCalls` array. Give each one the arguments as submitted and a `position`: the number of completed calls before it. A forbidden tool then fails the trial even when the service blocked it, and a refused call made before its prerequisites fails the order check.
 
 Return durable, externally observed evidence:
 

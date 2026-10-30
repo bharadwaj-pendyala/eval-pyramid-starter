@@ -6,6 +6,7 @@ import type {
   EvalTask,
   Grade,
   JsonValue,
+  RejectedToolCall,
   ToolCall,
   ToolExpectation,
 } from '../types.js';
@@ -113,11 +114,14 @@ function validatorFor(schema: { [key: string]: JsonValue }): ValidateFunction {
 
 function gradeTools(
   calls: ToolCall[],
-  rejectedCalls: ToolCall[],
+  rejectedCalls: RejectedToolCall[],
   required: ToolExpectation[],
   forbidden: string[]
 ): Grade {
-  const { unmatched, early } = checkOrder(calls, required);
+  const { unmatched, early } = checkOrder(
+    inAttemptOrder(calls, rejectedCalls),
+    required
+  );
   const forbiddenCalls = calls.filter((call) => forbidden.includes(call.name));
   const forbiddenAttempts = rejectedCalls.filter((call) =>
     forbidden.includes(call.name)
@@ -138,17 +142,42 @@ function gradeTools(
   );
 }
 
-// A call that matches a later requirement before its predecessors ran is out of
-// order even if the sequence completes afterwards. Repeats of satisfied steps are retries.
-function checkOrder(
+interface ToolAttempt {
+  call: ToolCall;
+  rejected: boolean;
+}
+
+function inAttemptOrder(
   calls: ToolCall[],
+  rejectedCalls: RejectedToolCall[]
+): ToolAttempt[] {
+  const attempts: ToolAttempt[] = [];
+  let completed = 0;
+  for (const rejectedCall of rejectedCalls) {
+    while (completed < Math.min(rejectedCall.position, calls.length)) {
+      attempts.push({ call: calls[completed] as ToolCall, rejected: false });
+      completed += 1;
+    }
+    attempts.push({ call: rejectedCall, rejected: true });
+  }
+  for (const call of calls.slice(completed)) {
+    attempts.push({ call, rejected: false });
+  }
+  return attempts;
+}
+
+// An attempt that matches a later requirement before its predecessors ran is out
+// of order, even if it was refused. Only completed calls satisfy a requirement,
+// and a repeat of the current step is a retry.
+function checkOrder(
+  attempts: ToolAttempt[],
   required: ToolExpectation[]
 ): { unmatched: ToolExpectation[]; early: ToolCall[] } {
   let matched = 0;
   const early: ToolCall[] = [];
-  for (const call of calls) {
+  for (const { call, rejected } of attempts) {
     const next = required[matched];
-    if (next && toolMatches(call, next)) {
+    if (!rejected && next && toolMatches(call, next)) {
       matched += 1;
     } else if (
       required.slice(matched + 1).some((step) => toolMatches(call, step))

@@ -4,6 +4,7 @@ import type {
   EvidenceObserver,
   JsonValue,
   ObservedEvidence,
+  RejectedToolCall,
   SystemRun,
   SystemUnderTest,
   ToolCall,
@@ -140,7 +141,7 @@ function isObservedEvidence(value: unknown): value is ObservedEvidence {
     value['toolCalls'].every(isToolCall) &&
     (value['rejectedToolCalls'] === undefined ||
       (Array.isArray(value['rejectedToolCalls']) &&
-        value['rejectedToolCalls'].every(isToolCall))) &&
+        value['rejectedToolCalls'].every(isRejectedToolCall))) &&
     typeof value['source'] === 'string' &&
     value['source'].trim().length > 0
   );
@@ -161,6 +162,14 @@ function isToolCall(value: unknown): value is ToolCall {
     typeof value['name'] === 'string' &&
     isRecord(value['arguments']) &&
     Object.values(value['arguments']).every(isJsonValue)
+  );
+}
+
+function isRejectedToolCall(value: unknown): value is RejectedToolCall {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value['position']) &&
+    isToolCall(value)
   );
 }
 
