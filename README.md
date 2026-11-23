@@ -4,6 +4,8 @@ An executable TypeScript reference for evaluating LLM applications and agents. T
 
 The repository follows one refund workflow through every grader and scope. The offline example starts a real application server and a separate tool service on ephemeral localhost ports. Tool actions mutate trial-scoped state on disk. The harness reads that state through an observer endpoint, measures wall-clock latency itself, applies release gates, and writes reviewable evidence. Nothing depends on an injected trial-number failure.
 
+New to the ideas behind it? The [companion series](#companion-series) explains each layer, starting with [Part I: The Eval Pyramid](https://bharad.dev/blog/eval-pyramid).
+
 ## Quick start
 
 Requirements: Node.js 22.13 or a current Node.js 24 release, plus npm.
@@ -126,9 +128,9 @@ Read [`SECURITY.md`](SECURITY.md) and [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL
 
 ## Companion series
 
-- [The Eval Pyramid](https://bharad.dev/blog/eval-pyramid)
-- [Measuring Agent Reliability](https://bharad.dev/blog/measuring-agent-reliability)
-- [Build the Eval Pyramid](https://bharad.dev/blog/build-the-eval-pyramid)
+- [Part I: The Eval Pyramid](https://bharad.dev/blog/eval-pyramid). Why graders are ordered by the cost of one verdict, and why repeated trials are a separate axis.
+- [Part II: Measuring Agent Reliability](https://bharad.dev/blog/measuring-agent-reliability). How to read pass@1, pass@k and pass^k per task, and how to check a model judge.
+- [Part III: Build the Eval Pyramid](https://bharad.dev/blog/build-the-eval-pyramid). A walkthrough of this repository, from one failing trial to a blocked release.
 
 ## Contributing and license
 
